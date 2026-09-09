@@ -32,6 +32,8 @@ NON-DESTRUCTIVE BY DESIGN
   * Existing destination files are never overwritten; a numeric suffix is
     added instead.
   * Titles classed as "skip" simply stay where they are.
+  * Re-running on the same rip is a no-op: anything an earlier run already
+    placed here is skipped, so nothing is duplicated (--force overrides).
   * --dry-run prints the plan and touches nothing.
 
 TWO WAYS TO RUN IT
@@ -78,7 +80,7 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
 from statistics import median
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -372,6 +374,101 @@ def unique(path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Manifest
+# ---------------------------------------------------------------------------
+
+def read_manifest(folder: Path) -> Tuple[List[dict], bool]:
+    """
+    (runs, readable) for one folder's manifest.
+
+    Missing is the normal first-run case: readable and empty. Unreadable is
+    reported but not fatal — losing the history costs at worst a duplicate
+    placement, whereas raising would abort a legitimate run, and would do so
+    after execute() had already placed the files. The flag lets a caller that
+    is about to rewrite the file preserve the old bytes first.
+    """
+    manifest = folder / MANIFEST_NAME
+    if not manifest.exists():
+        return [], True
+    try:
+        runs = json.loads(manifest.read_text())
+    except (OSError, ValueError) as e:
+        print(f"WARNING: cannot read {manifest} ({e}); treating it as empty.",
+              file=sys.stderr)
+        return [], False
+    if not isinstance(runs, list):
+        print(f"WARNING: {manifest} is not a list of runs; treating it as empty.",
+              file=sys.stderr)
+        return [], False
+    return runs, True
+
+
+def load_manifest(folder: Path) -> List[dict]:
+    """The runs recorded for one folder; [] when missing or unreadable."""
+    return read_manifest(folder)[0]
+
+
+def placed_actions(folder: Path) -> List[dict]:
+    """Every action from every run recorded for this folder."""
+    return [a for run in load_manifest(folder) for a in run.get("actions", [])]
+
+
+def match_placed(t: Title, actions: List[dict]) -> Optional[dict]:
+    """
+    Find the action that already placed this title, if any.
+
+    Being literally the same file is proof, and covers the common "I ran it
+    twice" case whatever the method was. A re-rip of the same disc title has
+    a new path and inode but reproduces the byte count and duration exactly,
+    so that is the fallback. Both tests are exact: a false positive silently
+    drops a real title, which is worse than the duplicate a miss produces.
+    """
+    for a in actions:
+        src = a.get("source")
+        if src and Path(src).exists():
+            try:
+                if os.path.samefile(src, t.path):
+                    return a
+            except OSError:
+                pass
+    for a in actions:
+        if a.get("size") == t.size and a.get("duration") is not None \
+                and int(a["duration"]) == int(t.duration):
+            return a
+    return None
+
+
+def mark_already_placed(plan: Plan) -> int:
+    """
+    Skip titles an earlier run already placed here, so re-running the script
+    on the same rip is a no-op rather than a second copy.
+
+    Runs after classify(), whose verdict it overrides, and before the TUI, so
+    the user sees the decision and can reverse it with `k`. Returns how many
+    titles it marked.
+    """
+    actions = placed_actions(library_root(plan))
+    if not actions:
+        return 0
+
+    marked = 0
+    for t in plan.titles:
+        if t.kind == SKIP:                  # leave classify's own reason alone
+            continue
+        found = match_placed(t, actions)
+        if found is None:
+            continue
+        dst = found.get("destination", "?")
+        try:
+            where = Path(dst).relative_to(plan.library)
+        except ValueError:
+            where = dst                     # library moved since that run
+        t.kind, t.note = SKIP, f"already placed as {where}"
+        marked += 1
+    return marked
+
+
+# ---------------------------------------------------------------------------
 # Execution
 # ---------------------------------------------------------------------------
 
@@ -410,7 +507,8 @@ def execute(plan: Plan, mode: str, dry_run: bool) -> None:
         used = place(t.path, dst, mode)
         print(f"  {used:9s} {t.path.name:40s} → {rel}")
         actions.append({"source": str(t.path), "destination": str(dst),
-                        "kind": t.kind, "method": used, "note": t.note})
+                        "kind": t.kind, "method": used, "note": t.note,
+                        "size": t.size, "duration": t.duration})
 
     if dry_run:
         print("\n(dry run — nothing written)")
@@ -420,7 +518,13 @@ def execute(plan: Plan, mode: str, dry_run: bool) -> None:
     root = library_root(plan)
     root.mkdir(parents=True, exist_ok=True)
     manifest = root / MANIFEST_NAME
-    existing = json.loads(manifest.read_text()) if manifest.exists() else []
+    existing, readable = read_manifest(root)
+    if not readable:
+        # We are about to replace it, and nothing here destroys what the user
+        # might still want to salvage by hand.
+        kept = unique(manifest.with_name(MANIFEST_NAME + ".corrupt"))
+        manifest.rename(kept)
+        print(f"Unreadable manifest kept as {kept.name}", file=sys.stderr)
     existing.append({"when": datetime.now().isoformat(timespec="seconds"),
                      "name": plan.name, "tv": plan.tv,
                      "provider_id": plan.provider_id, "actions": actions})
@@ -591,6 +695,8 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--copy", action="store_true", help="always copy (default: hardlink, copy if not possible)")
     mode.add_argument("--move", action="store_true", help="move files instead of linking (still never overwrites)")
+    p.add_argument("--force", action="store_true",
+                   help="place titles even if an earlier run already placed them")
     p.add_argument("--yes", "-y", action="store_true", help="unattended: apply the heuristics without the TUI")
     p.add_argument("--dry-run", action="store_true", help="show the plan, write nothing")
     return p.parse_args(argv)
@@ -657,6 +763,12 @@ def main(argv: List[str]) -> int:
                 tv=a.tv, season=a.season, titles=scan(src),
                 provider_id=provider_id(a.tmdb, a.imdb))
     classify(plan, a.runtime, a.min_extra, a.version_ratio, a.dup_tolerance)
+
+    if not a.force:
+        already = mark_already_placed(plan)
+        if already:
+            print(f"{already} title(s) were already placed by an earlier run "
+                  f"and will be skipped (--force places them again).")
 
     mode = "move" if a.move else "copy" if a.copy else "hardlink"
     interactive = not a.yes and sys.stdin.isatty() and sys.stdout.isatty()
