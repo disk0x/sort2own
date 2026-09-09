@@ -70,6 +70,7 @@ HOW THE HEURISTICS WORK  (see classify())
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -107,6 +108,10 @@ EXTRA_TYPES = [
 MAIN, VERSION, EXTRA, EPISODE, SKIP = "main", "version", "extra", "episode", "skip"
 
 MANIFEST_NAME = ".sort2own.json"
+
+# Sampled-hash geometry: four 1 MiB blocks, evenly spread.
+SAMPLE_BLOCK = 1 << 20
+SAMPLE_POINTS = 4
 
 
 # ---------------------------------------------------------------------------
@@ -472,6 +477,44 @@ def mark_already_placed(plan: Plan) -> int:
 # Execution
 # ---------------------------------------------------------------------------
 
+def sample_hash(path: Path, full: bool = False) -> str:
+    """
+    A cheap fingerprint of a file: four 1 MiB blocks spread through it, plus
+    its length. Hashing a 30 GB remux in full takes minutes and buys little —
+    size equality already catches truncation, and sampling catches the rest
+    for a few MiB of reads. `full` hashes every byte when the user asks.
+    """
+    h = hashlib.blake2b(digest_size=16)
+    size = path.stat().st_size
+    with path.open("rb") as f:
+        if full or size <= SAMPLE_BLOCK * SAMPLE_POINTS:
+            for chunk in iter(lambda: f.read(SAMPLE_BLOCK), b""):
+                h.update(chunk)
+        else:
+            last = size - SAMPLE_BLOCK
+            for i in range(SAMPLE_POINTS):
+                f.seek(round(i * last / (SAMPLE_POINTS - 1)))
+                h.update(f.read(SAMPLE_BLOCK))
+    h.update(str(size).encode())
+    return h.hexdigest()
+
+
+def verify_copy(src: Path, dst: Path, expect_size: int,
+                full: bool) -> Tuple[Optional[str], str]:
+    """
+    Check a copy we just made against its source, since shutil.copy2 verifies
+    nothing and a half-written file over SMB looks like a real one. Returns
+    (problem or None, fingerprint of dst).
+    """
+    got = dst.stat().st_size
+    if got != expect_size:
+        return f"copied {got} bytes, expected {expect_size}", ""
+    digest = sample_hash(dst, full)
+    if digest != sample_hash(src, full):
+        return "copy does not match the source", digest
+    return None, digest
+
+
 def place(src: Path, dst: Path, mode: str) -> str:
     """
     Put src at dst using the requested mode. Returns the mode actually used
@@ -491,9 +534,13 @@ def place(src: Path, dst: Path, mode: str) -> str:
     return "copy"
 
 
-def execute(plan: Plan, mode: str, dry_run: bool) -> None:
-    """Apply the plan and write a manifest so every action is auditable."""
+def execute(plan: Plan, mode: str, dry_run: bool, full_verify: bool = False) -> int:
+    """
+    Apply the plan and write a manifest so every action is auditable.
+    Returns the number of files that failed verification.
+    """
     actions = []
+    failures = 0
     for t in plan.titles:
         dst = destination(plan, t)
         if dst is None:
@@ -505,14 +552,27 @@ def execute(plan: Plan, mode: str, dry_run: bool) -> None:
             print(f"  {mode:9s} {t.path.name:40s} → {rel}")
             continue
         used = place(t.path, dst, mode)
+        if used == "copy":
+            problem, digest = verify_copy(t.path, dst, t.size, full_verify)
+            if problem:
+                # Our own file, written seconds ago, and known bad.
+                dst.unlink()
+                print(f"  FAILED    {t.path.name:40s} {problem} — removed")
+                failures += 1
+                continue
+        else:
+            # A hardlink is the same inode, and a move leaves nothing behind
+            # to compare against; fingerprint the result so undo can check it.
+            digest = sample_hash(dst, full_verify)
         print(f"  {used:9s} {t.path.name:40s} → {rel}")
         actions.append({"source": str(t.path), "destination": str(dst),
                         "kind": t.kind, "method": used, "note": t.note,
-                        "size": t.size, "duration": t.duration})
+                        "size": t.size, "duration": t.duration,
+                        "sample_hash": digest, "full_hash": full_verify})
 
     if dry_run:
         print("\n(dry run — nothing written)")
-        return
+        return 0
 
     # Manifest: lets you see later exactly where each disc title went.
     root = library_root(plan)
@@ -530,6 +590,10 @@ def execute(plan: Plan, mode: str, dry_run: bool) -> None:
                      "provider_id": plan.provider_id, "actions": actions})
     manifest.write_text(json.dumps(existing, indent=2, ensure_ascii=False))
     print(f"\nDone. Manifest: {manifest}")
+    if failures:
+        print(f"{failures} file(s) failed verification and were removed; the "
+              f"sources are untouched, so re-running is safe.", file=sys.stderr)
+    return failures
 
 
 # ---------------------------------------------------------------------------
@@ -695,6 +759,10 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--copy", action="store_true", help="always copy (default: hardlink, copy if not possible)")
     mode.add_argument("--move", action="store_true", help="move files instead of linking (still never overwrites)")
+    p.add_argument("--verify", choices=["sample", "full"], default="sample",
+                   help="how thoroughly to check a copy against its source: "
+                        "'sample' reads a few MiB (default), 'full' hashes "
+                        "every byte")
     p.add_argument("--force", action="store_true",
                    help="place titles even if an earlier run already placed them")
     p.add_argument("--yes", "-y", action="store_true", help="unattended: apply the heuristics without the TUI")
@@ -785,8 +853,7 @@ def main(argv: List[str]) -> int:
         sys.exit("--yes requires --name 'Title (Year)' (a guessed name is too risky unattended)")
 
     print(f"\n{'TV' if plan.tv else 'Movie'}: {plan.name}   library: {plan.library}   method: {mode}\n")
-    execute(plan, mode, a.dry_run)
-    return 0
+    return 1 if execute(plan, mode, a.dry_run, a.verify == "full") else 0
 
 
 if __name__ == "__main__":
