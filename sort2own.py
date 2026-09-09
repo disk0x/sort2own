@@ -597,6 +597,135 @@ def execute(plan: Plan, mode: str, dry_run: bool, full_verify: bool = False) -> 
 
 
 # ---------------------------------------------------------------------------
+# Undo
+# ---------------------------------------------------------------------------
+
+def undo_action(action: dict, folder: Path, dry_run: bool) -> Tuple[str, bool]:
+    """
+    Reverse one placement. Returns (message, ok).
+
+    This is the only part of the tool that deletes, so it refuses whenever it
+    cannot prove the file is the one it put there: a mismatch means something
+    else wrote it, and removing it would destroy work that is not ours.
+    """
+    dst = Path(action.get("destination", ""))
+    src = Path(action.get("source", ""))
+    method = action.get("method", "")
+    name = dst.name or "?"
+
+    try:
+        dst.relative_to(folder)
+    except ValueError:
+        return f"REFUSED       {dst} is outside {folder}", False
+
+    if not dst.exists():
+        return f"already gone  {name}", True
+
+    if method == "move":
+        # Moving back cannot destroy anything, so the only question is whether
+        # the old location is free.
+        if src.exists():
+            return f"REFUSED       {name}: {src} is occupied", False
+        if not dry_run:
+            src.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(dst), str(src))
+        return f"move back     {name} → {src}", True
+
+    if method == "hardlink":
+        if not src.exists():
+            return (f"REFUSED       {name}: {src} is gone, so this may be the "
+                    f"only copy", False)
+        if not os.path.samefile(src, dst):
+            return f"REFUSED       {name}: no longer the same file as {src}", False
+    elif method == "copy":
+        if not src.exists():
+            return (f"REFUSED       {name}: {src} is gone, so this is the only "
+                    f"copy — remove it by hand if that is what you want", False)
+        recorded = action.get("sample_hash")
+        if action.get("size") is None or recorded is None:
+            return (f"REFUSED       {name}: the manifest predates copy "
+                    f"verification, so this cannot be checked", False)
+        if dst.stat().st_size != action["size"]:
+            return f"REFUSED       {name}: size changed since it was placed", False
+        if sample_hash(dst, action.get("full_hash", False)) != recorded:
+            return f"REFUSED       {name}: contents changed since it was placed", False
+    else:
+        return f"REFUSED       {name}: unknown method {method!r}", False
+
+    if not dry_run:
+        dst.unlink()
+    return f"remove        {name}", True
+
+
+def prune_empty(folder: Path) -> None:
+    """
+    Drop the extras/season subfolders an undo emptied. Only ever removes a
+    directory that is already empty, so nothing can be lost here.
+    """
+    for d in sorted(folder.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+        if d.is_dir() and not any(d.iterdir()):
+            d.rmdir()
+
+
+def undo(folder: Path, run_index: Optional[int], undo_all: bool,
+         dry_run: bool) -> int:
+    """Reverse recorded runs, newest first. Returns a process exit code."""
+    if not folder.is_dir():
+        sys.exit(f"{folder} is not a directory")
+    runs, readable = read_manifest(folder)
+    if not readable:
+        sys.exit(f"{folder / MANIFEST_NAME} is unreadable; refusing to guess "
+                 f"what to remove.")
+    if not runs:
+        sys.exit(f"No runs recorded in {folder / MANIFEST_NAME}")
+
+    if undo_all:
+        chosen = list(range(len(runs)))
+    elif run_index is not None:
+        if not 0 <= run_index < len(runs):
+            sys.exit(f"--run {run_index} is out of range (0…{len(runs) - 1})")
+        chosen = [run_index]
+    else:
+        pending = [i for i, r in enumerate(runs) if not r.get("undone")]
+        if not pending:
+            sys.exit("Every recorded run has already been undone.")
+        chosen = [pending[-1]]
+
+    refused = 0
+    for i in sorted(chosen, reverse=True):
+        run = runs[i]
+        actions = run.get("actions", [])
+        print(f"Run {i} — {run.get('when', '?')}, {len(actions)} action(s)"
+              + ("  [already undone]" if run.get("undone") else ""))
+        clean = True
+        for action in reversed(actions):
+            message, ok = undo_action(action, folder, dry_run)
+            print(f"  {message}")
+            if not ok:
+                refused += 1
+                clean = False
+        if clean and not dry_run:
+            run["undone"] = datetime.now().isoformat(timespec="seconds")
+
+    if dry_run:
+        print("\n(dry run — nothing removed)")
+        return 0
+
+    prune_empty(folder)
+    manifest = folder / MANIFEST_NAME
+    if not [p for p in folder.iterdir() if p != manifest]:
+        manifest.unlink(missing_ok=True)
+        folder.rmdir()
+        print(f"\nRemoved the now-empty {folder}")
+    else:
+        manifest.write_text(json.dumps(runs, indent=2, ensure_ascii=False))
+    if refused:
+        print(f"\n{refused} file(s) were left in place; see the reasons above.",
+              file=sys.stderr)
+    return 1 if refused else 0
+
+
+# ---------------------------------------------------------------------------
 # TUI  (curses; stdlib only)
 # ---------------------------------------------------------------------------
 
@@ -735,8 +864,10 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         epilog="Examples:\n"
                "  %(prog)s ~/rips/A_FILM\n"
                "  %(prog)s ~/rips/A_FILM --yes --name 'A Film (2024)' --runtime 119\n"
-               "  %(prog)s ~/rips/DISC1 --yes --tv --name 'A Series (2016)' --season 2\n")
-    p.add_argument("source", type=Path, help="directory containing MakeMKV's *.mkv output")
+               "  %(prog)s ~/rips/DISC1 --yes --tv --name 'A Series (2016)' --season 2\n"
+               "  %(prog)s --undo '/media/movies/A Film (2024)'\n")
+    p.add_argument("source", type=Path, nargs="?",
+                   help="directory containing MakeMKV's *.mkv output")
     p.add_argument("--library", type=Path, default=Path(os.environ.get("SORT2OWN_LIBRARY", "/media/movies")),
                    help="root of the Jellyfin library (default: $SORT2OWN_LIBRARY or /media/movies)")
     p.add_argument("--name", help='"Title (Year)"; required with --yes, guessed otherwise')
@@ -767,6 +898,13 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
                    help="place titles even if an earlier run already placed them")
     p.add_argument("--yes", "-y", action="store_true", help="unattended: apply the heuristics without the TUI")
     p.add_argument("--dry-run", action="store_true", help="show the plan, write nothing")
+    p.add_argument("--undo", type=Path, metavar="FOLDER",
+                   help="reverse what an earlier run placed in FOLDER, using its manifest")
+    which = p.add_mutually_exclusive_group()
+    which.add_argument("--run", type=int, metavar="N",
+                       help="with --undo: undo run N (0-based; default is the last one left)")
+    which.add_argument("--all", action="store_true",
+                       help="with --undo: undo every recorded run")
     return p.parse_args(argv)
 
 
@@ -820,6 +958,14 @@ def provider_id(tmdb: Optional[str], imdb: Optional[str]) -> str:
 
 def main(argv: List[str]) -> int:
     a = parse_args(argv)
+
+    if a.undo:
+        return undo(a.undo.expanduser().resolve(), a.run, a.all, a.dry_run)
+    if (a.run is not None or a.all) and not a.undo:
+        sys.exit("--run and --all only apply to --undo")
+    if a.source is None:
+        sys.exit("a source directory is required (or --undo FOLDER)")
+
     src = a.source.expanduser().resolve()
     if not src.is_dir():
         sys.exit(f"{src} is not a directory")
