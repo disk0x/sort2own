@@ -101,10 +101,27 @@ def make_rip(src_dir):
         target.mkdir(parents=True, exist_ok=True)
         for i, spec in enumerate(specs):
             path = target / spec.get("name", f"Film_t{i:02d}.mkv")
+            duration = spec["duration"]
+            # audio: list of {title, language} — one tagged track each, the way
+            # a disc presents "Deutsch 5.1" and "Audiokommentar".
+            audio = spec.get("audio", [])
+
             cmd = ["ffmpeg", "-v", "error", "-y",
-                   "-f", "lavfi", "-i", "color=c=black:s=64x36:r=1",
-                   "-t", str(spec["duration"]),
-                   "-c:v", "libx264", "-preset", "ultrafast"]
+                   "-f", "lavfi", "-i", f"color=c=black:s=64x36:r=1:d={duration}"]
+            for n, _ in enumerate(audio):
+                cmd += ["-f", "lavfi",
+                        "-i", f"sine=frequency={220 * (n + 1)}:d={duration}"]
+            cmd += ["-map", "0:v"]
+            for n, _ in enumerate(audio):
+                cmd += ["-map", f"{n + 1}:a"]
+            cmd += ["-c:v", "libx264", "-preset", "ultrafast"]
+            if audio:
+                cmd += ["-c:a", "aac"]
+            for n, track in enumerate(audio):
+                if track.get("title"):
+                    cmd += [f"-metadata:s:a:{n}", f"title={track['title']}"]
+                if track.get("language"):
+                    cmd += [f"-metadata:s:a:{n}", f"language={track['language']}"]
             if spec.get("tag"):
                 cmd += ["-metadata", f"title={spec['tag']}"]
             subprocess.run(cmd + [str(path)], check=True, capture_output=True)

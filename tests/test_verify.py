@@ -134,7 +134,7 @@ def test_a_bad_copy_is_removed_and_counted(make_plan, monkeypatch):
 
     root = sort2own.library_root(plan)
     assert not (root / "A Film (2024).mkv").exists()
-    assert (root / "extras" / "Trailer.mkv").exists()      # the good one stayed
+    assert (root / "trailers" / "Trailer.mkv").exists()    # the good one stayed
     assert plan.titles[0].path.exists()                    # source untouched
 
     runs = json.loads((root / sort2own.MANIFEST_NAME).read_text())

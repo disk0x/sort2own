@@ -156,7 +156,7 @@ def test_a_supplementary_disc_lands_in_the_existing_film_folder(make_rip,
 
     folder = library / "A Film (2024)"
     assert (folder / "A Film (2024).mkv").exists()          # untouched
-    assert (folder / "extras" / "Making of.mkv").exists()
+    assert (folder / "featurettes" / "Making of.mkv").exists()
     assert not list(folder.glob("* (2).mkv"))
 
 

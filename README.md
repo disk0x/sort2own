@@ -33,6 +33,29 @@ catalogues that can change or disappear. **Only rip discs you own**, and
 check that doing so is legal where you live; `sort2own` doesn't touch DRM
 or copy protection, it only organizes files MakeMKV has already produced.
 
+## Naming the extras
+
+Where MakeMKV kept the disc's own labels, `sort2own` reads them and files each
+extra by type — in German or English:
+
+```
+Deutscher Trailer            -> trailers/
+Die Story                    -> featurettes/
+Hinter den Kulissen          -> behind the scenes/
+Musikvideo EINE BAND …         -> scenes/
+Entfallene Szenen            -> deleted scenes/
+```
+
+A title the length of the feature carrying an audio track named
+*Audiokommentar* becomes a Jellyfin version called "Commentary" rather than an
+extra, which is what it actually is.
+
+Only labels the disc itself supplies are acted on. Where the shape of a file
+merely hints — something short with one audio track and no subtitles is
+probably a trailer — the guess is shown in the TUI as `maybe trailers: …` and
+left in `extras/` until you accept it with `e`. A wrong guess applied silently
+is worse than no guess.
+
 ## How it decides
 
 - **Main feature** — the longest title, or (with `--runtime`) whichever

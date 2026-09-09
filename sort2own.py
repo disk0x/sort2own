@@ -90,6 +90,7 @@ import sys
 import tomllib
 import urllib.error
 import urllib.request
+from collections import Counter
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
@@ -120,6 +121,27 @@ EXTRA_TYPES = [
 # Classification labels a title can end up with.
 MAIN, VERSION, EXTRA, EPISODE, SKIP = "main", "version", "extra", "episode", "skip"
 
+# What a disc calls its extras, mapped to the folder Jellyfin wants. German and
+# English both, because the library is both. Matched case-insensitively as
+# substrings, so "Deutscher Trailer" and "Making of ..." both land.
+EXTRA_KEYWORDS = [
+    ("trailers", ["trailer", "teaser", "tv spot", "kinospot", "vorschau"]),
+    ("interviews", ["interview", "gespräch", "im gespräch", "q&a"]),
+    ("behind the scenes", ["behind the scenes", "hinter den kulissen",
+                           "am set", "b-roll"]),
+    ("featurettes", ["making of", "making-of", "featurette", "dokumentation",
+                     "entstehung", "die story", "reality-check"]),
+    ("deleted scenes", ["deleted", "entfallene szene", "geschnittene szene",
+                        "alternate ending", "alternatives ende"]),
+    ("scenes", ["musikvideo", "music video", "soundtrack-video",
+                "soundtrack video"]),
+    ("other", ["outtakes", "pannen", "bloopers", "versprecher"]),
+]
+
+# An audio track named like this means the whole title is a commentary track
+# over the film, which Jellyfin models as a version rather than an extra.
+COMMENTARY_WORDS = ["commentary", "kommentar", "audiokommentar"]
+
 MANIFEST_NAME = ".sort2own.json"
 
 # Sampled-hash geometry: four 1 MiB blocks, evenly spread.
@@ -139,6 +161,11 @@ class Title:
     size: int                # bytes
     chapters: int
     tag: str                 # title tag embedded by MakeMKV (may be "")
+    # Everything the disc said about this title, for type_extra() to read.
+    audio_titles: List[str] = field(default_factory=list)
+    audio_langs: List[str] = field(default_factory=list)
+    chapter_titles: List[str] = field(default_factory=list)
+    streams: "Counter[str]" = field(default_factory=Counter)  # codec_type → count
     kind: str = EXTRA        # MAIN / VERSION / EXTRA / EPISODE / SKIP
     extra_type: str = "extras"   # which EXTRA_TYPES folder, when kind == EXTRA
     label: str = ""          # version name / extra file name / episode number
@@ -192,10 +219,19 @@ class Plan:
 # ---------------------------------------------------------------------------
 
 def ffprobe(path: Path) -> Title:
-    """Read duration, chapter count and title tag from one file via ffprobe."""
+    """
+    Read everything the disc has to say about one title in a single call.
+
+    The `stream=` selector pulls the streams in on its own — no `-show_streams`
+    is needed alongside it — so the audio track names and languages that let
+    type_extra() tell a commentary from a featurette cost nothing extra.
+    """
     cmd = [
         "ffprobe", "-v", "error",
-        "-show_entries", "format=duration:format_tags=title",
+        "-show_entries",
+        "format=duration:format_tags=title"
+        ":stream=codec_type:stream_tags=title,language"
+        ":chapter_tags=title",
         "-show_chapters",
         "-of", "json", str(path),
     ]
@@ -206,12 +242,23 @@ def ffprobe(path: Path) -> Title:
         sys.exit(f"ffprobe failed on {path}: {e}")
 
     fmt = data.get("format", {})
+    chapters = data.get("chapters", [])
+    streams = data.get("streams", [])
+    audio = [s for s in streams if s.get("codec_type") == "audio"]
+
+    def tags(entry: dict) -> dict:
+        return entry.get("tags") or {}
+
     return Title(
         path=path,
         duration=float(fmt.get("duration", 0) or 0),
         size=path.stat().st_size,
-        chapters=len(data.get("chapters", [])),
-        tag=(fmt.get("tags") or {}).get("title", "").strip(),
+        chapters=len(chapters),
+        tag=tags(fmt).get("title", "").strip(),
+        audio_titles=[t for t in (tags(s).get("title", "").strip() for s in audio) if t],
+        audio_langs=[l for l in (tags(s).get("language", "").strip() for s in audio) if l],
+        chapter_titles=[t for t in (tags(c).get("title", "").strip() for c in chapters) if t],
+        streams=Counter(s.get("codec_type", "?") for s in streams),
     )
 
 
@@ -270,6 +317,55 @@ def guess_name_from_source(src: Path) -> str:
     return base
 
 
+def match_keyword(text: str) -> Optional[str]:
+    """The extras folder a piece of disc text names, if any."""
+    lowered = text.lower()
+    for folder, words in EXTRA_KEYWORDS:
+        if any(word in lowered for word in words):
+            return folder
+    return None
+
+
+def is_commentary(t: Title) -> bool:
+    return any(word in title.lower()
+               for title in t.audio_titles for word in COMMENTARY_WORDS)
+
+
+def type_extra(t: Title, plan: Plan,
+               main: Optional[Title]) -> Tuple[Optional[str], bool, str]:
+    """
+    Work out what kind of extra a title is from what the disc says about it.
+
+    Returns (folder, confident, why). `confident` is the whole point: a
+    keyword the disc itself wrote is worth acting on, while a guess from
+    shape alone is only worth showing the user. A mistyped extra still
+    plays, but silently overriding a real label would be worse.
+    """
+    named = match_keyword(useful_tag(t, plan))
+    if named:
+        return named, True, f"disc calls it “{useful_tag(t, plan)}”"
+
+    for chapter in t.chapter_titles:
+        named = match_keyword(chapter)
+        if named:
+            return named, True, f"chapter “{chapter}”"
+
+    # Shape alone: something short with one video, one audio and no subtitles
+    # is usually a trailer. Not certain enough to apply on its own.
+    if (t.duration <= 180 and t.streams.get("video", 0) == 1
+            and t.streams.get("audio", 0) == 1
+            and not t.streams.get("subtitle", 0)):
+        return "trailers", False, "short, one audio track, no subtitles"
+
+    # A lone extra in a language the feature does not have is often an
+    # interview with an international guest. Weak on its own — never applied.
+    if main and t.audio_langs and main.audio_langs \
+            and not set(t.audio_langs) & set(main.audio_langs):
+        return "interviews", False, f"only {'/'.join(sorted(set(t.audio_langs)))} audio"
+
+    return None, False, ""
+
+
 def classify(plan: Plan, runtime_min: Optional[int], min_extra: int,
              version_ratio: float, dup_tolerance: float,
              dup_seconds: float = 2.0) -> None:
@@ -306,7 +402,22 @@ def classify(plan: Plan, runtime_min: Optional[int], min_extra: int,
     else:
         _classify_movie(plan, live, runtime_min, min_extra, version_ratio)
 
-    # --- 6. name the extras --------------------------------------------------
+    # --- 6. type the extras from what the disc says --------------------------
+    main = next((t for t in ts if t.kind == MAIN), None)
+    for t in ts:
+        if t.kind != EXTRA:
+            continue
+        folder, confident, why = type_extra(t, plan, main)
+        if not folder:
+            continue
+        if confident:
+            t.extra_type, t.note = folder, why
+        else:
+            # Shown in the TUI, where `e` cycles the type; not applied, because
+            # a guess from shape alone is not worth overriding "extras" for.
+            t.note = f"maybe {folder}: {why}"
+
+    # --- 7. name the extras --------------------------------------------------
     seen: set = set()
     for t in ts:
         if t.kind != EXTRA:
@@ -346,6 +457,11 @@ def _classify_movie(plan: Plan, live: List[Title], runtime_min: Optional[int],
         # --- 4. alternative cuts --------------------------------------------
         if reference and t.duration >= version_ratio * reference:
             t.kind = VERSION
+            if is_commentary(t):
+                # The film again with a commentary track over it. Jellyfin has
+                # no commentary type, and a version is what this actually is.
+                t.label, t.note = "Commentary", "audio track named as a commentary"
+                continue
             t.label = safe_name(useful_tag(t, plan)) or f"Alternate cut {int(t.duration // 60)}min"
             t.note = f"≥{int(version_ratio*100)}% of main length → version"
         # --- 5. junk -----------------------------------------------------------
