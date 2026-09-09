@@ -178,6 +178,36 @@ misidentifications. Pass the ID and Jellyfin has nothing to guess about:
 which produces `A Film (2024) [tmdbid-112233]/`. `--imdb tt…` works
 the same way.
 
+## Box sets and second discs
+
+A season spread over several discs is several MakeMKV runs. `--continue`
+carries the numbering on from whatever is already in the season folder:
+
+```bash
+./sort2own.py ~/rips/DISC1 --yes --tv --name "A Series (2016)"
+./sort2own.py ~/rips/DISC2 --yes --tv --name "A Series (2016)" --continue
+```
+
+giving `S01E01`–`S01E03` and then `S01E04`–`S01E06`. It reads the file names
+in the folder, not its own records, so episodes you put there by hand are
+counted too. `--start-episode N` sets the number yourself.
+
+A disc that carries a "play all" title — every episode end to end — has it
+skipped rather than filed as a mystery extra.
+
+For a film's second disc of extras, `--supplement` places everything as
+extras or alternate cuts and does not go looking for a feature:
+
+```bash
+./sort2own.py ~/rips/DISC2 --yes --name "A Film (2024)" \
+  --supplement --disc-label "Disc 2"
+```
+
+Alternate cuts are judged against the feature already in the folder, so a
+110-minute cut next to a 120-minute feature is recognised as a version
+rather than an extra. Anything the first disc already contributed — the
+trailer, typically — is skipped instead of placed twice.
+
 ## Undoing a run
 
 ```bash
@@ -202,10 +232,15 @@ re-encoded or replaced is reported and left where it is.
 | `--tmdb ID` / `--imdb ID` | — | pin the film, e.g. `[tmdbid-112233]` in the folder name |
 | `--tv` | off | treat the disc as TV episodes |
 | `--season N` | `1` | season number in TV mode |
+| `--continue` | — | with `--tv`: carry on numbering after the episodes already there |
+| `--start-episode N` | — | with `--tv`: number this disc's first episode N |
+| `--supplement` | — | a film's further disc: everything is an extra or an alternate cut |
+| `--disc-label TEXT` | — | note recorded in the manifest, e.g. `"Disc 2"` |
 | `--runtime MIN` | — | pick the title closest to this runtime as the main feature, instead of the longest |
 | `--min-extra SEC` | `90` | titles shorter than this are skipped as junk |
 | `--version-ratio X` | `0.85` | titles at least this fraction of the main length become alternate versions |
-| `--dup-tolerance X` | `0.01` | duration/size tolerance (1%) for duplicate detection |
+| `--dup-tolerance X` | `0.01` | size tolerance (1%) for duplicate detection |
+| `--dup-seconds SEC` | `2.0` | how close two lengths must be to count as the same content |
 | `--copy` | — | always copy, never hardlink |
 | `--move` | — | move files instead of linking |
 | `--verify sample\|full` | `sample` | how thoroughly to check each copy; `full` hashes every byte |
@@ -271,8 +306,11 @@ See Jellyfin's own docs for the full spec:
   making-of by duration alone. Use the TUI to reclassify by hand for discs
   you care about.
 - Only `.mkv` input is supported (MakeMKV's only output format).
-- TV episode numbering follows disc order; multi-disc box sets currently
-  need `--season`/numbering handled per disc.
+- Episodes are found by clustering around the median length, so a long
+  featurette on an episode disc gets numbered as an episode. Press `k` in
+  the TUI to correct it.
+- On a film disc, a "play all extras" title longer than the feature itself
+  will be taken for the feature. Pass `--runtime` to settle it.
 - `--tv-library` is decided from the command line, so toggling `t` inside
   the TUI switches the layout but not the library root.
 

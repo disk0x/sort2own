@@ -170,6 +170,10 @@ class Plan:
     season: int = 1
     titles: List[Title] = field(default_factory=list)
     provider_id: str = ""    # "tmdbid-12345" / "imdbid-tt1234567", or ""
+    supplement: bool = False # a further disc: the feature is already placed
+    main_duration: float = 0.0   # that feature's length, for judging versions
+    start_episode: int = 1   # first episode number this disc contributes
+    disc_label: str = ""     # free text for the manifest, e.g. "Disc 2"
 
     @property
     def folder(self) -> str:
@@ -319,21 +323,28 @@ def _classify_movie(plan: Plan, live: List[Title], runtime_min: Optional[int],
                     min_extra: int, version_ratio: float) -> None:
     if not live:
         return
-    # --- 2. pick the main feature ---------------------------------------------
-    if runtime_min:
-        target = runtime_min * 60
-        main = min(live, key=lambda t: abs(t.duration - target))
-        main.note = f"closest to --runtime {runtime_min} min"
+
+    if plan.supplement:
+        # A further disc carries no feature of its own; anything long enough
+        # to be an alternate cut is judged against the one already placed.
+        main, reference = None, plan.main_duration
     else:
-        main = max(live, key=lambda t: t.duration)
-        main.note = "longest title"
-    main.kind = MAIN
+        # --- 2. pick the main feature -----------------------------------------
+        if runtime_min:
+            target = runtime_min * 60
+            main = min(live, key=lambda t: abs(t.duration - target))
+            main.note = f"closest to --runtime {runtime_min} min"
+        else:
+            main = max(live, key=lambda t: t.duration)
+            main.note = "longest title"
+        main.kind = MAIN
+        reference = main.duration
 
     for t in live:
         if t is main:
             continue
         # --- 4. alternative cuts --------------------------------------------
-        if t.duration >= version_ratio * main.duration:
+        if reference and t.duration >= version_ratio * reference:
             t.kind = VERSION
             t.label = safe_name(useful_tag(t, plan)) or f"Alternate cut {int(t.duration // 60)}min"
             t.note = f"≥{int(version_ratio*100)}% of main length → version"
@@ -354,7 +365,7 @@ def _classify_tv(plan: Plan, live: List[Title], min_extra: int) -> None:
     if not candidates:
         return
     med = median(t.duration for t in candidates)
-    ep = 1
+    ep = plan.start_episode
     for t in live:
         if t.duration < min_extra:
             t.kind, t.note = SKIP, f"shorter than {min_extra}s"
@@ -363,6 +374,15 @@ def _classify_tv(plan: Plan, live: List[Title], min_extra: int) -> None:
             ep += 1
         else:
             t.note = "extra (length unlike the episodes)"
+
+    # Box-set discs often carry a "play all" title: every episode end to end.
+    # Placed, it would give Jellyfin a second copy of the whole disc.
+    episodes = [t for t in live if t.kind == EPISODE]
+    if len(episodes) > 1:
+        total = sum(t.duration for t in episodes)
+        for t in live:
+            if t.kind != EPISODE and abs(t.duration - total) <= 0.02 * total:
+                t.kind, t.note = SKIP, "play-all (every episode end to end)"
 
 
 # ---------------------------------------------------------------------------
@@ -392,6 +412,26 @@ def destination(plan: Plan, t: Title) -> Optional[Path]:
     if t.kind == EXTRA:
         return root / t.extra_type / f"{safe_name(t.label) or duration_label(t)}.mkv"
     return None
+
+
+def next_episode(plan: Plan) -> int:
+    """
+    The first free episode number in this season.
+
+    Read from the file names already in the season folder rather than from the
+    manifest, so episodes put there by hand, or by some earlier tool, are
+    counted too — the folder is the truth about what Jellyfin will see.
+    """
+    season_dir = library_root(plan) / f"Season {plan.season:02d}"
+    if not season_dir.is_dir():
+        return 1
+    numbering = re.compile(rf"S{plan.season:02d}E(\d+)", re.IGNORECASE)
+    highest = 0
+    for episode in season_dir.glob("*.mkv"):
+        found = numbering.search(episode.name)
+        if found:
+            highest = max(highest, int(found.group(1)))
+    return highest + 1
 
 
 def unique(path: Path) -> Path:
@@ -613,7 +653,8 @@ def execute(plan: Plan, mode: str, dry_run: bool,
         print(f"Unreadable manifest kept as {kept.name}", file=sys.stderr)
     existing.append({"when": datetime.now().isoformat(timespec="seconds"),
                      "name": plan.name, "tv": plan.tv,
-                     "provider_id": plan.provider_id, "actions": actions})
+                     "provider_id": plan.provider_id, "disc": plan.disc_label,
+                     "actions": actions})
     manifest.write_text(json.dumps(existing, indent=2, ensure_ascii=False))
     print(f"\nDone. Manifest: {manifest}")
     if failures:
@@ -836,7 +877,11 @@ def run_tui(plan: Plan) -> bool:
                 if t.kind == VERSION and not t.label:
                     t.label = useful_tag(t, plan) or "Alternate cut"
                 if t.kind == EPISODE and not t.label.isdigit():
-                    t.label = str(1 + sum(1 for o in plan.titles if o.kind == EPISODE and o is not t))
+                    # Counts on from this disc's first number, not from 1, so
+                    # --continue keeps working when the user edits by hand.
+                    t.label = str(plan.start_episode
+                                  + sum(1 for o in plan.titles
+                                        if o.kind == EPISODE and o is not t))
                 if t.kind == EXTRA and (not t.label or t.label.isdigit()):
                     t.label = useful_tag(t, plan) or duration_label(t)
                 t.note = "set by user"
@@ -1049,6 +1094,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--name", help='"Title (Year)"; required with --yes, guessed otherwise')
     p.add_argument("--tv", action="store_true", help="treat the disc as TV episodes")
     p.add_argument("--season", type=int, default=1, help="season number for --tv (default 1)")
+    episodes = p.add_mutually_exclusive_group()
+    episodes.add_argument("--continue", dest="continue_episodes", action="store_true",
+                          help="with --tv: carry on numbering after the episodes "
+                               "already in the season folder (for the next disc of a set)")
+    episodes.add_argument("--start-episode", type=int, metavar="N",
+                          help="with --tv: number this disc's first episode N")
+    p.add_argument("--supplement", action="store_true",
+                   help="a further disc of a set: place everything as extras or "
+                        "alternate cuts, and do not look for a main feature here")
+    p.add_argument("--disc-label", metavar="TEXT",
+                   help="free-text note recorded in the manifest, e.g. 'Disc 2'")
     ids = p.add_mutually_exclusive_group()
     ids.add_argument("--tmdb", metavar="ID",
                      help="TMDB id, appended to the folder name as [tmdbid-ID] so "
@@ -1166,6 +1222,11 @@ def main(argv: List[str]) -> int:
         return code
     if (a.run is not None or a.all) and not a.undo:
         sys.exit("--run and --all only apply to --undo")
+    if (a.continue_episodes or a.start_episode is not None) and not a.tv:
+        sys.exit("--continue and --start-episode only apply to --tv")
+    if a.supplement and a.tv:
+        sys.exit("--supplement is for a film's extra disc; for a further disc "
+                 "of a series use --tv --continue")
     if a.source is None:
         sys.exit("a source directory is required (or --undo FOLDER)")
 
@@ -1183,7 +1244,30 @@ def main(argv: List[str]) -> int:
     plan = Plan(name=a.name or guess_name_from_source(src),
                 library=library.expanduser().resolve(),
                 tv=a.tv, season=a.season, titles=scan(src),
-                provider_id=provider_id(a.tmdb, a.imdb))
+                provider_id=provider_id(a.tmdb, a.imdb),
+                supplement=a.supplement, disc_label=a.disc_label or "")
+
+    if a.supplement:
+        # Judge alternate cuts against the feature already in the library.
+        feature = library_root(plan) / f"{plan.folder}.mkv"
+        if feature.exists():
+            plan.main_duration = ffprobe(feature).duration
+        elif a.dry_run:
+            print(f"(dry run: {feature.name} is not there yet, so alternate "
+                  f"cuts cannot be told apart from extras)\n")
+        else:
+            sys.exit(f"--supplement expects the main feature to be placed "
+                     f"already, but {feature} is not there. Sort the first "
+                     f"disc first.")
+
+    if plan.tv:
+        if a.start_episode is not None:
+            plan.start_episode = a.start_episode
+        elif a.continue_episodes:
+            plan.start_episode = next_episode(plan)
+            print(f"Continuing season {plan.season:02d} at episode "
+                  f"{plan.start_episode}.")
+
     classify(plan, a.runtime, a.min_extra, a.version_ratio, a.dup_tolerance,
              a.dup_seconds)
 
