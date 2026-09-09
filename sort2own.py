@@ -175,6 +175,8 @@ class Title:
     extra_type: str = "extras"   # which EXTRA_TYPES folder, when kind == EXTRA
     label: str = ""          # version name / extra file name / episode number
     note: str = ""           # why the heuristic chose this (shown in TUI)
+    suggestion: str = ""     # something we found but will not apply unattended;
+                             # flagged in the TUI so the user can act on it
 
     @property
     def hms(self) -> str:
@@ -355,12 +357,11 @@ def type_extra(t: Title, plan: Plan,
         if named:
             return named, True, f"chapter “{chapter}”"
 
-    # Shape alone: something short with one video, one audio and no subtitles
-    # is usually a trailer. Not certain enough to apply on its own.
-    if (t.duration <= 180 and t.streams.get("video", 0) == 1
-            and t.streams.get("audio", 0) == 1
-            and not t.streams.get("subtitle", 0)):
-        return "trailers", False, "short, one audio track, no subtitles"
+    # There was a rule here guessing "trailer" from shape alone — short, one
+    # video, one audio, no subtitles. Measured against a real Blu-ray it fired
+    # on all ten extras, of which two were trailers: no discriminating power,
+    # and it drowned the genuine flags in the TUI. A reader can see a
+    # duration for themselves. Do not reinstate it without evidence.
 
     # A lone extra in a language the feature does not have is often an
     # interview with an international guest. Weak on its own — never applied.
@@ -380,7 +381,7 @@ def classify(plan: Plan, runtime_min: Optional[int], min_extra: int,
     """
     ts = plan.titles
     for t in ts:                      # reset, so the function is idempotent
-        t.kind, t.label, t.note = EXTRA, "", ""
+        t.kind, t.label, t.note, t.suggestion = EXTRA, "", "", ""
 
     # --- 3. duplicates: the same content exposed by two playlists ------------
     # Both windows are deliberately narrow, because a duplicate is the *same
@@ -423,9 +424,10 @@ def classify(plan: Plan, runtime_min: Optional[int], min_extra: int,
         if confident:
             t.extra_type, t.note = folder, why
         else:
-            # Shown in the TUI, where `e` cycles the type; not applied, because
-            # a guess from shape alone is not worth overriding "extras" for.
-            t.note = f"maybe {folder}: {why}"
+            # Flagged in the TUI, where `e` cycles the type; not applied,
+            # because a guess from shape alone is not worth overriding
+            # "extras" for.
+            t.suggestion = f"maybe {folder} — {why}"
 
     # --- 7. name the extras --------------------------------------------------
     seen: set = set()
@@ -963,7 +965,9 @@ def run_tui(plan: Plan) -> bool:
         season = f"  season {plan.season:02d}" if plan.tv else ""
         stdscr.addstr(0, 0, f"sort2own  —  {kind_word}: {plan.name}{season}"[: w - 1], curses.A_BOLD)
         stdscr.addstr(1, 0, f"library: {plan.library}"[: w - 1])
-        hdr = f"{'#':>3} {'file':28s} {'length':>8} {'size':>7} {'ch':>3}  {'kind':8s} {'→ destination / note'}"
+        waiting = sum(1 for t in plan.titles if t.suggestion)
+        hdr = (f"{'#':>3} {'?':1s} {'file':26s} {'length':>8} {'size':>7} {'ch':>3}  "
+               f"{'kind':8s} {'→ destination / suggestion'}")
         stdscr.addstr(3, 0, hdr[: w - 1], curses.A_UNDERLINE)
 
         for i, t in enumerate(plan.titles):
@@ -972,16 +976,27 @@ def run_tui(plan: Plan) -> bool:
                 break
             dst = destination(plan, t)
             where = str(dst.relative_to(plan.library)) if dst else f"(skip: {t.note})"
+            # A suggestion is the whole reason to be looking at this screen, so
+            # it goes in the row, not just the footer — otherwise it is only
+            # found by arrowing onto every line.
+            if t.suggestion:
+                where = f"{where}   ← {t.suggestion}"
             kind = t.kind if t.kind != EXTRA else f"extra/{t.extra_type}"
-            line = (f"{i:>3} {t.path.name[:28]:28s} {t.hms:>8} {t.gib:>7} {t.chapters:>3}  "
-                    f"{kind[:14]:14s} {where}")
+            line = (f"{i:>3} {'?' if t.suggestion else ' '} {t.path.name[:26]:26s} "
+                    f"{t.hms:>8} {t.gib:>7} {t.chapters:>3}  {kind[:14]:14s} {where}")
             attr = curses.A_REVERSE if i == cur else curses.A_NORMAL
             if t.kind == SKIP:
                 attr |= curses.A_DIM
+            elif t.suggestion and i != cur:
+                attr |= curses.A_BOLD
             stdscr.addstr(y, 0, line[: w - 1], attr)
 
         t = plan.titles[cur]
-        info = f"tag: {t.tag or '—'}   heuristic: {t.note}"
+        info = f"tag: {t.tag or '—'}   heuristic: {t.note or '—'}"
+        if t.suggestion:
+            info += f"   ← {t.suggestion}"
+        elif waiting:
+            info += f"   ({waiting} row(s) marked ? need a decision)"
         stdscr.addstr(h - 3, 0, info[: w - 1])
         stdscr.addstr(h - 2, 0, HELP[: w - 1], curses.A_DIM)
         stdscr.refresh()
@@ -1104,16 +1119,21 @@ def apply_release_hints(plan: Plan, ref: str, apply: bool) -> None:
         if not fits:
             continue
         if len(fits) > 1:
-            t.note = f"OFDb: could be {' / '.join(fits[:3])}"
+            t.suggestion = f"OFDb: could be {' / '.join(fits[:3])}"
             ambiguous += 1
             continue
-        t.note = f"OFDb: {fits[0]}"
         if apply:
             t.label = safe_name(fits[0]) or t.label
             folder = match_keyword(fits[0])
             if folder and t.kind == EXTRA:
                 t.extra_type = folder
+            # A name from the disc's own release listing beats anything
+            # guessed earlier, so drop the guess rather than leave the row
+            # flagged as needing a decision it no longer needs.
+            t.note, t.suggestion = f"OFDb: {fits[0]}", ""
             named += 1
+        else:
+            t.suggestion = f"OFDb: {fits[0]}"
 
     print(f"OFDb: {len(listings)} extras listed, {named} matched by length"
           + (f", {ambiguous} ambiguous (see the notes)" if ambiguous else "")

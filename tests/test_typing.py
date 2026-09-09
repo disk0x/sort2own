@@ -85,24 +85,14 @@ def test_the_title_tag_wins_over_a_chapter(make_plan):
 
 # --- shape-based guesses ---------------------------------------------------
 
-def test_a_short_simple_title_is_guessed_as_a_trailer(make_plan):
-    plan = make_plan([{"duration": 90}])
-    t = plan.titles[0]
-    t.streams = sort2own.Counter({"video": 1, "audio": 1})
-    folder, confident, _ = sort2own.type_extra(t, plan, None)
-    assert folder == "trailers"
-    assert confident is False          # a guess, never applied on its own
-
-
-def test_subtitles_rule_out_the_trailer_guess(make_plan):
-    plan = make_plan([{"duration": 90}])
-    t = plan.titles[0]
-    t.streams = sort2own.Counter({"video": 1, "audio": 1, "subtitle": 2})
-    assert sort2own.type_extra(t, plan, None)[0] is None
-
-
-def test_a_long_untagged_title_is_not_guessed_at(make_plan):
-    plan = make_plan([{"duration": 900}])
+@pytest.mark.parametrize("duration", [90, 150, 900])
+def test_shape_alone_is_never_guessed_from(make_plan, duration):
+    """
+    There was a "short, one audio track, no subtitles → probably a trailer"
+    rule. On a real Blu-ray it fired on all ten extras, two of which were
+    trailers, and buried the genuine flags in the TUI. Shape is not evidence.
+    """
+    plan = make_plan([{"duration": duration}])
     t = plan.titles[0]
     t.streams = sort2own.Counter({"video": 1, "audio": 1})
     assert sort2own.type_extra(t, plan, None)[0] is None
@@ -140,12 +130,14 @@ def test_confident_types_are_applied(make_plan):
     assert ts[2].extra_type == "featurettes"
 
 
-def test_a_guess_is_shown_but_not_applied(make_plan):
-    plan = make_plan([{"duration": 7200}, {"duration": 90}])
-    plan.titles[1].streams = sort2own.Counter({"video": 1, "audio": 1})
+def test_a_weak_signal_is_flagged_but_not_applied(make_plan):
+    """A foreign-language extra hints at an interview; it is never applied."""
+    plan = make_plan([{"duration": 7200}, {"duration": 600}])
+    plan.titles[0].audio_langs = ["ger"]
+    plan.titles[1].audio_langs = ["eng"]
     ts = classify(plan)
     assert ts[1].extra_type == "extras"          # untouched
-    assert ts[1].note.startswith("maybe trailers")
+    assert ts[1].suggestion.startswith("maybe interviews")
 
 
 def test_an_untyped_extra_keeps_the_generic_folder(make_plan):

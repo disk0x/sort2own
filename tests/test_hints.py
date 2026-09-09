@@ -149,14 +149,15 @@ def test_an_ambiguous_length_is_reported_and_not_applied(make_plan, monkeypatch)
     """137s is both "Behind the Scenes" and a trailer in the reel."""
     ts = hinted(make_plan, [{"duration": 137}], monkeypatch=monkeypatch)
     assert ts[1].label == "Extra 2m17s"          # left as it was
-    assert "could be" in ts[1].note
-    assert "Behind the Scenes" in ts[1].note and "Erster Entwurf" in ts[1].note
+    assert "could be" in ts[1].suggestion        # flagged for the TUI
+    assert "Behind the Scenes" in ts[1].suggestion
+    assert "Erster Entwurf" in ts[1].suggestion
 
 
 def test_a_length_nobody_lists_is_left_alone(make_plan, monkeypatch):
     ts = hinted(make_plan, [{"duration": 999}], monkeypatch=monkeypatch)
     assert ts[1].label == "Extra 16m39s"
-    assert "OFDb" not in ts[1].note
+    assert "OFDb" not in ts[1].note + ts[1].suggestion
 
 
 def test_matching_is_within_a_second_either_way(make_plan, monkeypatch):
@@ -169,17 +170,17 @@ def test_two_seconds_out_is_not_a_match(make_plan, monkeypatch):
     assert ts[1].label != "Die Story"
 
 
-def test_without_apply_the_name_is_only_reported(make_plan, monkeypatch):
+def test_without_apply_the_name_is_only_suggested(make_plan, monkeypatch):
     ts = hinted(make_plan, [{"duration": 150}], apply=False,
                 monkeypatch=monkeypatch)
-    assert ts[1].note == "OFDb: Die Story"
+    assert ts[1].suggestion == "OFDb: Die Story"
     assert ts[1].label == "Extra 2m30s"          # untouched
 
 
 def test_untimed_listings_never_match(make_plan, monkeypatch):
     ts = hinted(make_plan, [{"duration": 300}],
                 listings=[("Trailershow", None)], monkeypatch=monkeypatch)
-    assert "OFDb" not in ts[1].note
+    assert "OFDb" not in ts[1].note + ts[1].suggestion
 
 
 # --- failures stay advisory ------------------------------------------------
