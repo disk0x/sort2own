@@ -31,6 +31,9 @@ def test_a_url_is_refused_rather_than_silently_resolved(url):
     "/media/My: Films",          # a colon inside a name is not a scheme
     "relative/dir",
     "~",
+    # gvfs mounts a share at a real path whose name contains "smb-share:" —
+    # a genuine filesystem path that must not be mistaken for a URL.
+    "/run/user/1000/gvfs/smb-share:server=nas.example,share=media/media/movies",
 ])
 def test_ordinary_paths_pass_through(good):
     assert isinstance(sort2own.local_path(Path(good), "--library"), Path)
