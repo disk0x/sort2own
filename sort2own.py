@@ -636,7 +636,12 @@ def mark_already_placed(plan: Plan) -> int:
     the user sees the decision and can reverse it with `k`. Returns how many
     titles it marked.
     """
-    actions = placed_actions(library_root(plan))
+    # Only count a past action if its file is still there. The manifest
+    # records what was done, not what survives: delete an extra and the record
+    # of it remains, and without this check the title would be skipped as
+    # "already placed" forever and never restored.
+    actions = [a for a in placed_actions(library_root(plan))
+               if Path(a.get("destination", "")).exists()]
     if not actions:
         return 0
 

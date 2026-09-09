@@ -43,6 +43,7 @@ def test_manifest_that_is_not_a_list_degrades_to_empty(tmp_path, capsys):
 def test_same_file_is_recognised_by_inode(make_plan):
     plan = a_plan(make_plan)
     main = plan.titles[0]
+    (plan.library / "x.mkv").touch()          # the placed file is still there
     write_manifest(sort2own.library_root(plan), [{
         "source": str(main.path), "destination": str(plan.library / "x.mkv"),
         "kind": MAIN, "method": "hardlink", "size": 1, "duration": 1,
@@ -57,6 +58,7 @@ def test_a_re_rip_elsewhere_is_recognised_by_size_and_duration(make_plan,
     """New path, new inode, identical bytes — the fallback key."""
     plan = a_plan(make_plan)
     main = plan.titles[0]
+    (plan.library / "A Film (2024).mkv").touch()
     write_manifest(sort2own.library_root(plan), [{
         "source": str(tmp_path / "gone" / "Film_t00.mkv"),
         "destination": str(plan.library / "A Film (2024).mkv"),
@@ -104,6 +106,24 @@ def test_no_manifest_means_nothing_is_marked(make_plan):
     assert sort2own.mark_already_placed(plan) == 0
 
 
+def test_a_recorded_placement_whose_file_is_gone_does_not_count(make_plan):
+    """
+    "Already placed" has to mean the file is still there. Delete an extra and
+    the manifest still records it; without checking, the title would be
+    skipped forever and never restored.
+    """
+    plan = a_plan(make_plan)
+    main = plan.titles[0]
+    write_manifest(sort2own.library_root(plan), [{
+        "source": str(main.path),
+        "destination": str(plan.library / "deleted-since.mkv"),
+        "kind": MAIN, "method": "copy",
+        "size": main.size, "duration": main.duration,
+    }])
+    assert sort2own.mark_already_placed(plan) == 0
+    assert main.kind == MAIN
+
+
 # --- end to end ------------------------------------------------------------
 
 def run(src, library, *extra):
@@ -128,7 +148,21 @@ def test_running_twice_places_nothing_the_second_time(make_rip, src_dir,
     assert runs[1]["actions"] == []
 
 
-def test_force_places_them_again(make_rip, src_dir, library):
+def test_a_deleted_extra_is_restored_while_the_rest_is_left_alone(make_rip,
+                                                                  src_dir,
+                                                                  library):
+    """The realistic repair case: the feature is fine, an extra went missing."""
+    make_rip([{"duration": 20}, {"duration": 4, "tag": "Trailer"}])
+    run(src_dir, library)
+    folder = library / "Test Film (2024)"
+    main = folder / "Test Film (2024).mkv"
+    placed_before = main.stat().st_mtime_ns
+    (folder / "trailers" / "Trailer.mkv").unlink()
+
+    assert run(src_dir, library) == 0
+    assert (folder / "trailers" / "Trailer.mkv").exists()   # back
+    assert main.stat().st_mtime_ns == placed_before         # untouched
+    assert not list(folder.rglob("* (2).mkv"))              # not duplicated
     make_rip([{"duration": 20}, {"duration": 4, "tag": "Trailer"}])
     run(src_dir, library)
     run(src_dir, library, "--force")
