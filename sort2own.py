@@ -142,6 +142,18 @@ class Plan:
     tv: bool = False
     season: int = 1
     titles: List[Title] = field(default_factory=list)
+    provider_id: str = ""    # "tmdbid-12345" / "imdbid-tt1234567", or ""
+
+    @property
+    def folder(self) -> str:
+        """
+        The folder name. A provider ID pins the film for Jellyfin so a remake
+        or a same-title film cannot be matched instead. It is kept out of
+        `name` so tag hygiene and the year regex keep working on the bare
+        title.
+        """
+        base = safe_name(self.name)
+        return f"{base} [{self.provider_id}]" if self.provider_id else base
 
 
 # ---------------------------------------------------------------------------
@@ -322,15 +334,23 @@ def _classify_tv(plan: Plan, live: List[Title], min_extra: int) -> None:
 # Destination naming
 # ---------------------------------------------------------------------------
 
+def library_root(plan: Plan) -> Path:
+    """The film's / show's folder. May not exist yet."""
+    return plan.library / plan.folder
+
+
 def destination(plan: Plan, t: Title) -> Optional[Path]:
     """Where a title will land, or None if it is skipped."""
-    root = plan.library / safe_name(plan.name)
+    root = library_root(plan)
+    # Main and version file names must start with the *exact* folder name,
+    # provider ID included, or Jellyfin reads them as separate movies.
     if t.kind == MAIN:
-        return root / f"{safe_name(plan.name)}.mkv"
+        return root / f"{plan.folder}.mkv"
     if t.kind == VERSION:
         # "Name (Year) - Label.mkv" next to the main file = Jellyfin version
-        return root / f"{safe_name(plan.name)} - {safe_name(t.label) or 'Alternate cut'}.mkv"
+        return root / f"{plan.folder} - {safe_name(t.label) or 'Alternate cut'}.mkv"
     if t.kind == EPISODE:
+        # Episodes are matched on SxxEyy, so they keep the bare show name.
         ep = int(t.label or 0)
         return root / f"Season {plan.season:02d}" / \
             f"{safe_name(plan.name)} S{plan.season:02d}E{ep:02d}.mkv"
@@ -397,12 +417,13 @@ def execute(plan: Plan, mode: str, dry_run: bool) -> None:
         return
 
     # Manifest: lets you see later exactly where each disc title went.
-    root = plan.library / safe_name(plan.name)
+    root = library_root(plan)
     root.mkdir(parents=True, exist_ok=True)
     manifest = root / MANIFEST_NAME
     existing = json.loads(manifest.read_text()) if manifest.exists() else []
     existing.append({"when": datetime.now().isoformat(timespec="seconds"),
-                     "name": plan.name, "tv": plan.tv, "actions": actions})
+                     "name": plan.name, "tv": plan.tv,
+                     "provider_id": plan.provider_id, "actions": actions})
     manifest.write_text(json.dumps(existing, indent=2, ensure_ascii=False))
     print(f"\nDone. Manifest: {manifest}")
 
@@ -553,6 +574,12 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     p.add_argument("--name", help='"Title (Year)"; required with --yes, guessed otherwise')
     p.add_argument("--tv", action="store_true", help="treat the disc as TV episodes")
     p.add_argument("--season", type=int, default=1, help="season number for --tv (default 1)")
+    ids = p.add_mutually_exclusive_group()
+    ids.add_argument("--tmdb", metavar="ID",
+                     help="TMDB id, appended to the folder name as [tmdbid-ID] so "
+                          "Jellyfin cannot misidentify the film (e.g. 112233)")
+    ids.add_argument("--imdb", metavar="ID",
+                     help="IMDb id, appended as [imdbid-ID] (e.g. tt7654321)")
     p.add_argument("--runtime", type=int, metavar="MIN",
                    help="expected main-feature runtime in minutes; picks the closest title instead of the longest")
     p.add_argument("--min-extra", type=int, default=90, metavar="SEC",
@@ -604,6 +631,19 @@ def check_hardlink_feasible(src: Path, library: Path, interactive: bool) -> bool
     return ans in ("y", "yes")
 
 
+def provider_id(tmdb: Optional[str], imdb: Optional[str]) -> str:
+    """Validate --tmdb / --imdb into the suffix Jellyfin parses, or ""."""
+    if tmdb:
+        if not re.fullmatch(r"\d+", tmdb):
+            sys.exit(f"--tmdb takes a numeric id like 112233 (got {tmdb!r})")
+        return f"tmdbid-{tmdb}"
+    if imdb:
+        if not re.fullmatch(r"tt\d+", imdb):
+            sys.exit(f"--imdb takes an id like tt7654321 (got {imdb!r})")
+        return f"imdbid-{imdb}"
+    return ""
+
+
 def main(argv: List[str]) -> int:
     a = parse_args(argv)
     src = a.source.expanduser().resolve()
@@ -614,7 +654,8 @@ def main(argv: List[str]) -> int:
 
     plan = Plan(name=a.name or guess_name_from_source(src),
                 library=a.library.expanduser().resolve(),
-                tv=a.tv, season=a.season, titles=scan(src))
+                tv=a.tv, season=a.season, titles=scan(src),
+                provider_id=provider_id(a.tmdb, a.imdb))
     classify(plan, a.runtime, a.min_extra, a.version_ratio, a.dup_tolerance)
 
     mode = "move" if a.move else "copy" if a.copy else "hardlink"
