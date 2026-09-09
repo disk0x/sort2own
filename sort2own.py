@@ -373,7 +373,7 @@ def type_extra(t: Title, plan: Plan,
 
 def classify(plan: Plan, runtime_min: Optional[int], min_extra: int,
              version_ratio: float, dup_tolerance: float,
-             dup_seconds: float = 2.0) -> None:
+             dup_seconds: float = 0.2) -> None:
     """
     Fill in kind / extra_type / label / note for every title.
     Runs on the raw scan; the TUI lets the user override afterwards.
@@ -383,13 +383,18 @@ def classify(plan: Plan, runtime_min: Optional[int], min_extra: int,
         t.kind, t.label, t.note = EXTRA, "", ""
 
     # --- 3. duplicates: the same content exposed by two playlists ------------
-    # Length is matched in absolute seconds, not as a fraction: a duplicate is
-    # the same frames, so its duration is identical to well under a second,
-    # while a percentage window grows with the runtime. At 1% a 45-minute
-    # episode matched anything within 27 seconds, which quietly swallowed the
-    # other episodes on a TV disc. Getting this wrong in the loose direction
-    # destroys a real title silently; too tight merely leaves a visible extra
-    # copy, so it errs tight.
+    # Both windows are deliberately narrow, because a duplicate is the *same
+    # frames* remuxed: its duration matches to the millisecond and its size to
+    # within container overhead — kilobytes, not megabytes.
+    #
+    # Twice now the loose version has destroyed real content. At 1% of the
+    # runtime, three of four episodes on a 45-minute TV disc were swallowed as
+    # duplicates of the first. At 2 seconds and 1% of the size, a film disc
+    # dropped two genuine extras: its trailer reel carries several clips of
+    # near-identical length, 1.5 s and 1.6 MB apart on a 345 MB file.
+    #
+    # Erring tight costs a visible extra copy the TUI can drop. Erring loose
+    # loses a title with nothing but one line of output to show for it.
     for i, a in enumerate(ts):
         for b in ts[:i]:
             if b.kind == SKIP:
@@ -1314,11 +1319,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="titles shorter than this are skipped as junk (default 90)")
     p.add_argument("--version-ratio", type=float, default=0.85,
                    help="titles at least this fraction of the main length are alternate cuts (default 0.85)")
-    p.add_argument("--dup-tolerance", type=float, default=0.01,
-                   help="size tolerance for duplicate detection (default 0.01 = 1%%)")
-    p.add_argument("--dup-seconds", type=float, default=2.0, metavar="SEC",
+    p.add_argument("--dup-tolerance", type=float, default=0.001,
+                   help="size tolerance for duplicate detection (default 0.001 = 0.1%%)")
+    p.add_argument("--dup-seconds", type=float, default=0.2, metavar="SEC",
                    help="how close two titles' lengths must be to count as the "
-                        "same content (default 2.0 seconds)")
+                        "same content (default 0.2 seconds)")
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--copy", action="store_true", help="always copy (default: hardlink, copy if not possible)")
     mode.add_argument("--move", action="store_true", help="move files instead of linking (still never overwrites)")

@@ -68,6 +68,22 @@ def test_real_episodes_are_not_mistaken_for_each_other(make_plan):
     assert [t.label for t in ts] == ["1", "2", "3", "4"]
 
 
+def test_similar_trailers_on_one_disc_are_all_kept(make_plan):
+    """
+    Regression, from a real Blu-ray. Its trailer reel carries several clips of
+    near-identical length, and at 2 s / 1 % two genuine extras were dropped:
+    137.0 s beside 138.5 s (1.6 MB apart on 345 MB), and 126.6 s beside
+    126.8 s (0.67 MB apart on 257 MB).
+    """
+    disc = [{"duration": 126.6, "size": 256_941_482},
+            {"duration": 126.8, "size": 257_607_777},
+            {"duration": 137.0, "size": 343_379_403},
+            {"duration": 138.5, "size": 345_022_622},
+            {"duration": 7121.6, "size": 33_758_009_437}]
+    ts = classify(make_plan([dict(d) for d in disc]))
+    assert SKIP not in [t.kind for t in ts]
+
+
 def test_an_alternate_cut_is_not_a_duplicate(make_plan):
     """118 minutes against 120 is a different cut, not the same content."""
     ts = classify(make_plan([{"duration": 7200}, {"duration": 7080}]))
