@@ -1,0 +1,35 @@
+# Python byte-code / cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Packaging / build artifacts
+*.egg-info/
+dist/
+build/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Media test fixtures / scratch libraries (never track real or synthetic rips)
+*.mkv
+*.mp4
+test_library/
+scratch/
+
+# sort2own manifest (should only ever live in a destination library, never the repo)
+.sort2own.json
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
