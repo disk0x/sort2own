@@ -177,6 +177,7 @@ class Title:
     note: str = ""           # why the heuristic chose this (shown in TUI)
     suggestion: str = ""     # something we found but will not apply unattended;
                              # flagged in the TUI so the user can act on it
+    candidates: List[str] = field(default_factory=list)  # names to choose from
 
     @property
     def hms(self) -> str:
@@ -267,6 +268,26 @@ def ffprobe(path: Path) -> Title:
         chapter_titles=[t for t in (tags(c).get("title", "").strip() for c in chapters) if t],
         streams=Counter(s.get("codec_type", "?") for s in streams),
     )
+
+
+def open_in_player(path: Path) -> Optional[str]:
+    """
+    Hand a title to the desktop's default player so the user can see what it
+    actually is. Returns a problem, or None.
+
+    Detached and silent on purpose: it must not inherit the terminal the TUI
+    is drawing on, and it must outlive the keypress that started it.
+    """
+    opener = shutil.which("xdg-open") or shutil.which("open")
+    if opener is None:
+        return "no xdg-open on PATH"
+    try:
+        subprocess.Popen([opener, str(path)],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    except OSError as e:
+        return str(e)
+    return None
 
 
 def scan(src: Path) -> List[Title]:
@@ -382,6 +403,7 @@ def classify(plan: Plan, runtime_min: Optional[int], min_extra: int,
     ts = plan.titles
     for t in ts:                      # reset, so the function is idempotent
         t.kind, t.label, t.note, t.suggestion = EXTRA, "", "", ""
+        t.candidates = []
 
     # --- 3. duplicates: the same content exposed by two playlists ------------
     # Both windows are deliberately narrow, because a duplicate is the *same
@@ -937,8 +959,9 @@ def run_tui(plan: Plan) -> bool:
     import curses
 
     KINDS = [MAIN, VERSION, EXTRA, EPISODE, SKIP] if plan.tv else [MAIN, VERSION, EXTRA, SKIP]
-    HELP = ("↑↓ select  k kind  e extra-type  l label  n movie name  "
-            "s season  t tv/movie  Enter apply  q quit")
+    HELP = ("↑↓ select  p play  c choose  k kind  e extra-type  l label  "
+            "n name  s season  t tv/movie  Enter apply  q quit")
+    status = ""
 
     def prompt(stdscr, question: str, default: str = "") -> Optional[str]:
         """Single-line text input at the bottom of the screen."""
@@ -957,6 +980,30 @@ def run_tui(plan: Plan) -> bool:
         if s is None:
             return None
         return s or default
+
+    def choose(stdscr, t: Title) -> Optional[str]:
+        """
+        Offer the names this title could have. Returns the chosen one, or None
+        if the user backed out. Digits pick; anything else cancels.
+        """
+        import curses
+        stdscr.erase()
+        stdscr.addstr(0, 0, f"Which is {t.path.name}?  ({t.hms}, {t.gib})",
+                      curses.A_BOLD)
+        for n, name in enumerate(t.candidates[:9], start=1):
+            stdscr.addstr(1 + n, 2, f"{n}  {name}")
+        keep = t.label or duration_label(t)
+        stdscr.addstr(2 + len(t.candidates[:9]), 2, f"0  leave it as “{keep}”")
+        stdscr.addstr(4 + len(t.candidates[:9]), 0,
+                      "press a number, or any other key to go back",
+                      curses.A_DIM)
+        stdscr.refresh()
+        key = stdscr.getch()
+        if ord("1") <= key <= ord("9"):
+            picked = key - ord("1")
+            if picked < len(t.candidates):
+                return t.candidates[picked]
+        return None
 
     def draw(stdscr, cur: int) -> None:
         stdscr.erase()
@@ -992,24 +1039,48 @@ def run_tui(plan: Plan) -> bool:
             stdscr.addstr(y, 0, line[: w - 1], attr)
 
         t = plan.titles[cur]
-        info = f"tag: {t.tag or '—'}   heuristic: {t.note or '—'}"
-        if t.suggestion:
-            info += f"   ← {t.suggestion}"
-        elif waiting:
-            info += f"   ({waiting} row(s) marked ? need a decision)"
+        if status:
+            info = status
+        else:
+            info = f"tag: {t.tag or '—'}   heuristic: {t.note or '—'}"
+            if t.suggestion:
+                info += f"   ← {t.suggestion}"
+                if t.candidates:
+                    info += "   [c to choose]"
+            elif waiting:
+                info += f"   ({waiting} row(s) marked ? need a decision)"
         stdscr.addstr(h - 3, 0, info[: w - 1])
         stdscr.addstr(h - 2, 0, HELP[: w - 1], curses.A_DIM)
         stdscr.refresh()
 
     def loop(stdscr) -> bool:
+        nonlocal status
         curses.curs_set(0)
         cur = 0
         while True:
             draw(stdscr, cur)
             key = stdscr.getch()
+            status = ""                       # clear after one redraw
             t = plan.titles[cur]
 
-            if key == curses.KEY_UP:
+            if key == ord("p"):                              # watch it
+                problem = open_in_player(t.path)
+                status = (f"cannot open a player: {problem}" if problem
+                          else f"opened {t.path.name} in your media player")
+
+            elif key == ord("c"):                            # pick a name
+                if not t.candidates:
+                    status = "no candidates for this one — use l to type a name"
+                else:
+                    chosen = choose(stdscr, t)
+                    if chosen:
+                        t.label = safe_name(chosen) or t.label
+                        folder = match_keyword(chosen)
+                        if folder and t.kind == EXTRA:
+                            t.extra_type = folder
+                        t.note, t.suggestion, t.candidates = f"you chose: {chosen}", "", []
+
+            elif key == curses.KEY_UP:
                 cur = max(0, cur - 1)
             elif key == curses.KEY_DOWN:
                 cur = min(len(plan.titles) - 1, cur + 1)
@@ -1119,6 +1190,9 @@ def apply_release_hints(plan: Plan, ref: str, apply: bool) -> None:
         if not fits:
             continue
         if len(fits) > 1:
+            # Kept as a list, not just the sentence, so the TUI can offer them
+            # as a choice after the user has watched the file.
+            t.candidates = fits
             t.suggestion = f"OFDb: could be {' / '.join(fits[:3])}"
             ambiguous += 1
             continue

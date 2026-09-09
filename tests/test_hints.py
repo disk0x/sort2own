@@ -154,6 +154,18 @@ def test_an_ambiguous_length_is_reported_and_not_applied(make_plan, monkeypatch)
     assert "Erster Entwurf" in ts[1].suggestion
 
 
+def test_the_tied_names_are_kept_for_the_tui_to_offer(make_plan, monkeypatch):
+    """The TUI's `c` needs the names as a list, not just as a sentence."""
+    ts = hinted(make_plan, [{"duration": 137}], monkeypatch=monkeypatch)
+    assert ts[1].candidates == ["Behind the Scenes", "Erster Entwurf"]
+
+
+def test_an_unambiguous_match_leaves_nothing_to_choose(make_plan, monkeypatch):
+    ts = hinted(make_plan, [{"duration": 150}], monkeypatch=monkeypatch)
+    assert ts[1].candidates == []
+    assert ts[1].suggestion == ""                # settled, so not flagged
+
+
 def test_a_length_nobody_lists_is_left_alone(make_plan, monkeypatch):
     ts = hinted(make_plan, [{"duration": 999}], monkeypatch=monkeypatch)
     assert ts[1].label == "Extra 16m39s"

@@ -76,9 +76,21 @@ second, and the names are matched to your files by length:
 
 A name is applied only when exactly one listing matches within a second.
 Discs routinely include a trailer reel whose entries share runtimes with the
-real extras, so the rest are shown as candidates for you to pick in the TUI
-rather than guessed at. Unattended runs report the matches but change nothing
-unless you add `--ofdb-apply`.
+real extras, so the rest are marked `?` in the TUI rather than guessed at.
+
+For those, the quickest way to decide is to look: press `p` to open the file
+in your media player, watch a couple of seconds, then `c` to pick from the
+names it could be.
+
+```
+Which is A Film_t02.mkv?  (0:02:16, 0.26G)
+  1  Behind the Scenes
+  2  Erster Entwurf
+  0  leave it as "Extra 2m16s"
+```
+
+Unattended runs report the matches but change nothing unless you add
+`--ofdb-apply`.
 
 This lives in `hints_ofdb.py`, apart from the main script, because it parses
 someone else's HTML and that will break one day. Delete the file and
@@ -161,6 +173,8 @@ its guess before anything is written.
 | Key | Action |
 |---|---|
 | `↑` / `↓` | move selection |
+| `p` | play the selected file in your default media player |
+| `c` | choose from the candidate names for this file |
 | `k` | cycle kind: main / version / extra / episode / skip |
 | `e` | cycle the extras subfolder (trailers, featurettes, deleted scenes, …) |
 | `l` | edit the label / file name |
