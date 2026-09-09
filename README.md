@@ -188,6 +188,13 @@ file, which beats the built-in default. A misspelt setting is an error rather
 than being quietly ignored — a typo that silently does nothing is worse than
 one that stops you.
 
+> **Running from a Flatpak or Snap terminal?** Those set `XDG_CONFIG_HOME` to
+> a sandboxed directory, so `~/.config/sort2own/config.toml` is not where the
+> tool will look and your settings appear to be ignored. Check with
+> `echo $XDG_CONFIG_HOME`; if it points somewhere unexpected, pass
+> `--config ~/.config/sort2own/config.toml` or export
+> `SORT2OWN_CONFIG=~/.config/sort2own/config.toml`.
+
 ## Getting the film identified correctly
 
 Remakes, films sharing a title, and non-English releases are the usual
