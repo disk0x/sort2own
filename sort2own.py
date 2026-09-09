@@ -87,6 +87,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import tomllib
 import urllib.error
 import urllib.request
@@ -738,22 +739,75 @@ def verify_copy(src: Path, dst: Path, expect_size: int,
     return None, digest
 
 
-def place(src: Path, dst: Path, mode: str) -> str:
+COPY_CHUNK = 4 << 20
+PROGRESS_AFTER = 0.5      # only bother once a copy is visibly taking time
+PROGRESS_EVERY = 0.25
+
+
+def copy_file(src: Path, dst: Path, progress: bool) -> None:
+    """
+    Copy, reporting how far along it is.
+
+    `shutil.copy2` would do this in one line, but a 30 GB remux over SMB then
+    sits silent for several minutes with no way to tell a slow transfer from a
+    hung one. Progress goes to stderr so redirected stdout stays a clean
+    record of what was placed.
+    """
+    total = src.stat().st_size
+    done = 0
+    started = last_drawn = time.monotonic()
+    drew = False
+    with src.open("rb") as reader, dst.open("wb") as writer:
+        while True:
+            chunk = reader.read(COPY_CHUNK)
+            if not chunk:
+                break
+            writer.write(chunk)
+            done += len(chunk)
+            now = time.monotonic()
+            if (progress and now - started >= PROGRESS_AFTER
+                    and now - last_drawn >= PROGRESS_EVERY):
+                last_drawn = now
+                drew = True
+                sys.stderr.write("\r" + progress_line(dst.name, done, total,
+                                                      now - started))
+                sys.stderr.flush()
+    if drew:
+        sys.stderr.write("\r\033[K")      # take the progress line back down
+        sys.stderr.flush()
+    shutil.copystat(src, dst)
+
+
+def progress_line(name: str, done: int, total: int, elapsed: float) -> str:
+    rate = done / elapsed if elapsed > 0 else 0
+    left = (total - done) / rate if rate else 0
+    return (f"    {name[:32]:32s} {done / 2**30:6.2f}/{total / 2**30:.2f} GiB"
+            f" {done * 100 // max(total, 1):3d}%"
+            f"  {rate / 2**20:6.1f} MiB/s  {int(left) // 60:d}m{int(left) % 60:02d}s left")
+
+
+def place(src: Path, dst: Path, mode: str, progress: bool = False) -> str:
     """
     Put src at dst using the requested mode. Returns the mode actually used
     (hardlink silently falls back to copy across filesystems).
     """
     dst.parent.mkdir(parents=True, exist_ok=True)
-    if mode == "move":
-        shutil.move(str(src), str(dst))
-        return "move"
     if mode == "hardlink":
         try:
             os.link(src, dst)
             return "hardlink"
         except OSError:
             pass                       # different filesystem → copy
-    shutil.copy2(src, dst)
+    if mode == "move":
+        try:
+            os.rename(src, dst)        # same filesystem: instant, no copying
+            return "move"
+        except OSError:
+            pass                       # across filesystems: copy, then remove
+    copy_file(src, dst, progress)
+    if mode == "move":
+        src.unlink()
+        return "move"
     return "copy"
 
 
@@ -772,7 +826,7 @@ def execute(plan: Plan, mode: str, dry_run: bool,
         if dry_run:
             print(f"  {mode:9s} {t.path.name:40s} → {rel}")
             continue
-        used = place(t.path, dst, mode)
+        used = place(t.path, dst, mode, progress=sys.stderr.isatty())
         if used == "copy":
             problem, digest = verify_copy(t.path, dst, t.size, full_verify)
             if problem:
@@ -1488,14 +1542,19 @@ def same_filesystem(a: Path, b: Path) -> bool:
     return a.stat().st_dev == b.stat().st_dev
 
 
-def check_hardlink_feasible(src: Path, library: Path, interactive: bool) -> bool:
+def resolve_method(src: Path, library: Path, mode: str,
+                   interactive: bool) -> Optional[str]:
     """
-    Default mode is hardlink, which silently becomes a copy across
-    filesystems. Rather than surprise the user with a slow, space-doubling
-    copy (e.g. over SMB), warn and let them choose. Returns True to proceed.
+    Settle what will actually happen to the files, and return that — or None
+    to abort.
+
+    Hardlinking silently becomes a copy across filesystems, which over SMB
+    means a slow, space-doubling transfer the user did not ask for. So warn,
+    let them choose, and when they accept, return "copy": reporting a
+    "hardlink" run that copies every file is a lie the output should not tell.
     """
-    if same_filesystem(src, library):
-        return True
+    if mode != "hardlink" or same_filesystem(src, library):
+        return mode
     print(
         "WARNING: source and library are on different filesystems, so files\n"
         "cannot be hardlinked — they would be COPIED instead.\n"
@@ -1510,9 +1569,9 @@ def check_hardlink_feasible(src: Path, library: Path, interactive: bool) -> bool
     )
     if not interactive:
         print("Unattended mode: refusing to guess. Pass --copy or --move explicitly.", file=sys.stderr)
-        return False
+        return None
     ans = input("Continue with a copy anyway? [y/N] ").strip().lower()
-    return ans in ("y", "yes")
+    return "copy" if ans in ("y", "yes") else None
 
 
 def provider_id(tmdb: Optional[str], imdb: Optional[str]) -> str:
@@ -1597,9 +1656,11 @@ def main(argv: List[str]) -> int:
     mode = "move" if a.move else "copy" if a.copy else "hardlink"
     interactive = not a.yes and sys.stdin.isatty() and sys.stdout.isatty()
 
-    if mode == "hardlink" and not check_hardlink_feasible(src, plan.library, interactive):
+    settled = resolve_method(src, plan.library, mode, interactive)
+    if settled is None:
         print("Aborted, nothing written.")
         return 1
+    mode = settled
 
     if a.ofdb:
         # After the feasibility check, so an aborted run costs no page fetch.

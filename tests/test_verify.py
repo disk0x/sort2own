@@ -97,8 +97,8 @@ def break_copies(monkeypatch, when=lambda dst: True):
     """
     real = sort2own.place
 
-    def broken(src, dst, mode):
-        used = real(src, dst, mode)
+    def broken(src, dst, mode, **kwargs):
+        used = real(src, dst, mode, **kwargs)
         if when(dst):
             dst.write_bytes(b"half a file")
         return used
