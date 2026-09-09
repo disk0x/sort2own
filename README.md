@@ -67,6 +67,15 @@ fixed by hand in the interactive mode below.
   colliding name gets a `(2)` suffix instead.
 - Every run is logged to a `.sort2own.json` manifest in the movie folder,
   so you can see exactly what was placed and how.
+- **Running it twice does nothing the second time.** Anything an earlier run
+  already placed is skipped, so re-running after adding one more title never
+  duplicates the rest. `--force` overrides.
+- **Every copy is checked** against its source on size and a sampled hash. A
+  copy that does not match is deleted rather than left in your library, and
+  the run exits non-zero so a script notices.
+- **`--undo` reverses a run**, using the manifest. It removes a file only
+  when it can prove it put it there, so anything you have edited or replaced
+  since is reported and left alone.
 - `--dry-run` shows the full plan and writes nothing.
 
 `--move` is available if you'd rather relocate the files outright, but the
@@ -74,8 +83,11 @@ default is designed so a mistake costs you nothing.
 
 ## Install
 
-Requires **Python 3.8+** and **ffprobe** (part of [ffmpeg](https://ffmpeg.org/)).
+Requires **Python 3.11+** and **ffprobe** (part of [ffmpeg](https://ffmpeg.org/)).
 No other dependencies.
+
+It is deliberately a single file — copy `sort2own.py` to your NAS or into a
+container and run it; there is nothing to install.
 
 ```bash
 git clone https://github.com/disk0x/sort2own.git
@@ -126,12 +138,68 @@ TV example:
   --name "A Series (2016)" --library /media/tv
 ```
 
+## Configuration
+
+Anything you would otherwise retype every run can live in
+`~/.config/sort2own/config.toml` (or wherever `--config` / `$SORT2OWN_CONFIG`
+points):
+
+```toml
+library = "/tank/media/movies"
+tv_library = "/tank/media/tv"      # shows usually live in their own library
+min_extra = 30
+
+[jellyfin]
+url = "http://jellyfin.nas.example:8096"
+key_file = "~/.config/sort2own/jellyfin.key"   # keeps the key out of the config
+```
+
+With that in place the earlier example shortens to:
+
+```bash
+./sort2own.py ~/rips/A_FILM --yes --name "A Film (2024)"
+```
+
+A command-line flag beats an environment variable, which beats the config
+file, which beats the built-in default. A misspelt setting is an error rather
+than being quietly ignored — a typo that silently does nothing is worse than
+one that stops you.
+
+## Getting the film identified correctly
+
+Remakes, films sharing a title, and non-English releases are the usual
+misidentifications. Pass the ID and Jellyfin has nothing to guess about:
+
+```bash
+./sort2own.py ~/rips/A_FILM --yes \
+  --name "A Film (2024)" --tmdb 112233
+```
+
+which produces `A Film (2024) [tmdbid-112233]/`. `--imdb tt…` works
+the same way.
+
+## Undoing a run
+
+```bash
+./sort2own.py --undo "/media/movies/A Film (2024)"
+```
+
+Reverses the most recent run recorded in that folder — `--run N` picks an
+earlier one, `--all` reverses everything, and `--dry-run` shows what would
+go without touching anything. It deletes a file only when it can still prove
+that file is the one it placed: same inode for a hardlink, matching size and
+fingerprint for a copy, and the source still present. A file you have since
+re-encoded or replaced is reported and left where it is.
+
 ## Options
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--library PATH` | `$SORT2OWN_LIBRARY` or `/media/movies` | root of the Jellyfin library |
+| `--library PATH` | `/media/movies` | root of the Jellyfin library |
+| `--tv-library PATH` | — | separate root used when `--tv` is passed |
+| `--config PATH` | `$XDG_CONFIG_HOME/sort2own/config.toml` | config file |
 | `--name "Title (Year)"` | guessed from the source folder | required with `--yes` |
+| `--tmdb ID` / `--imdb ID` | — | pin the film, e.g. `[tmdbid-112233]` in the folder name |
 | `--tv` | off | treat the disc as TV episodes |
 | `--season N` | `1` | season number in TV mode |
 | `--runtime MIN` | — | pick the title closest to this runtime as the main feature, instead of the longest |
@@ -140,8 +208,17 @@ TV example:
 | `--dup-tolerance X` | `0.01` | duration/size tolerance (1%) for duplicate detection |
 | `--copy` | — | always copy, never hardlink |
 | `--move` | — | move files instead of linking |
+| `--verify sample\|full` | `sample` | how thoroughly to check each copy; `full` hashes every byte |
+| `--force` | — | place titles even if an earlier run already placed them |
+| `--undo FOLDER` | — | reverse what an earlier run placed there |
+| `--run N` / `--all` | last run | with `--undo`: which run(s) to reverse |
+| `--jellyfin-url URL` | — | ask this server to scan after the run |
+| `--jellyfin-key KEY` | — | its API key (prefer `jellyfin.key_file` in the config) |
 | `--yes`, `-y` | — | unattended mode; apply the heuristics without opening the TUI |
 | `--dry-run` | — | print the plan, write nothing |
+
+Environment overrides: `SORT2OWN_LIBRARY`, `SORT2OWN_TV_LIBRARY`,
+`SORT2OWN_JELLYFIN_URL`, `SORT2OWN_JELLYFIN_KEY`, `SORT2OWN_CONFIG`.
 
 ## Hardlinks and filesystems
 
@@ -170,14 +247,18 @@ that point:
 
 ```
 Movies/
-└── Title (Year)/
-    ├── Title (Year).mkv
-    ├── Title (Year) - Director's Cut.mkv     ← alternate version
+└── Title (Year) [tmdbid-12345]/               ← ID optional, see above
+    ├── Title (Year) [tmdbid-12345].mkv
+    ├── Title (Year) [tmdbid-12345] - Director's Cut.mkv   ← alternate version
     ├── trailers/
     ├── featurettes/
     ├── deleted scenes/
-    └── extras/                                ← generic, untyped bucket
+    ├── extras/                                ← generic, untyped bucket
+    └── .sort2own.json                         ← what was placed, and how
 ```
+
+Version files have to begin with the *exact* folder name, provider ID
+included — otherwise Jellyfin scans them as separate films.
 
 See Jellyfin's own docs for the full spec:
 [Movies](https://jellyfin.org/docs/general/server/media/movies/) ·
@@ -192,6 +273,8 @@ See Jellyfin's own docs for the full spec:
 - Only `.mkv` input is supported (MakeMKV's only output format).
 - TV episode numbering follows disc order; multi-disc box sets currently
   need `--season`/numbering handled per disc.
+- `--tv-library` is decided from the command line, so toggling `t` inside
+  the TUI switches the layout but not the library root.
 
 ## Related tools
 
