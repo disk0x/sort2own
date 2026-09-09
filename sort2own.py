@@ -126,6 +126,7 @@ EXTRA_TYPES = [
 
 # Classification labels a title can end up with.
 MAIN, VERSION, EXTRA, EPISODE, SKIP = "main", "version", "extra", "episode", "skip"
+KINDS = (MAIN, VERSION, EXTRA, EPISODE, SKIP)
 
 # What a disc calls its extras, mapped to the folder Jellyfin wants. German and
 # English both, because the library is both. Matched case-insensitively as
@@ -662,6 +663,73 @@ def match_placed(t: Title, actions: List[dict]) -> Optional[dict]:
     return None
 
 
+def recorded_naming(action: dict) -> Tuple[str, str]:
+    """
+    The label and extras folder a recorded action used.
+
+    Manifests written since this feature store both outright. Older ones only
+    have the destination — but the path *is* the decision, since an extra's
+    folder is its type and its file name is its label, so read them back off
+    it rather than making the user choose again.
+    """
+    if "label" in action or "extra_type" in action:
+        return action.get("label", ""), action.get("extra_type", "")
+
+    destination = action.get("destination")
+    if not destination:
+        return "", ""
+    path, kind = Path(destination), action.get("kind")
+    if kind == EXTRA:
+        return path.stem, path.parent.name
+    if kind == VERSION:
+        prefix = f"{path.parent.name} - "        # "<folder> - <label>.mkv"
+        return (path.stem[len(prefix):] if path.stem.startswith(prefix)
+                else path.stem), ""
+    if kind == EPISODE:
+        found = re.search(r"E(\d+)", path.stem)
+        return (found.group(1).lstrip("0") or "0") if found else "", ""
+    return "", ""
+
+
+def remembered_decisions(folder: Path) -> List[dict]:
+    """Everything a folder's manifest records deciding — placed and skipped."""
+    return [entry
+            for run in load_manifest(folder)
+            for key in ("actions", "skipped")
+            for entry in run.get(key, [])]
+
+
+def reuse_decisions(plan: Plan, folder: Path) -> int:
+    """
+    Adopt the choices recorded for another folder.
+
+    Sorting one rip into a second library — a local trial run, then the real
+    one on the NAS — otherwise means answering every question over again,
+    including the ones that took watching the file to settle. Matched the same
+    way as the already-placed check: the same file, or the same length and
+    size.
+    """
+    decisions = remembered_decisions(folder)
+    if not decisions:
+        return 0
+
+    reused = 0
+    for t in plan.titles:
+        found = match_placed(t, decisions)
+        if found is None or found.get("kind") not in KINDS:
+            continue
+        t.kind = found["kind"]
+        label, extra_type = recorded_naming(found)
+        if label:
+            t.label = label
+        if extra_type:
+            t.extra_type = extra_type
+        t.note = "as decided in an earlier run"
+        t.suggestion, t.candidates = "", []      # that question is answered
+        reused += 1
+    return reused
+
+
 def mark_already_placed(plan: Plan) -> int:
     """
     Skip titles an earlier run already placed here, so re-running the script
@@ -814,12 +882,17 @@ def place(src: Path, dst: Path, mode: str, progress: bool = False) -> str:
 def execute(plan: Plan, mode: str, dry_run: bool,
             full_verify: bool = False) -> Outcome:
     """Apply the plan and write a manifest so every action is auditable."""
-    actions = []
+    actions, skipped = [], []
     failures = 0
     for t in plan.titles:
         dst = destination(plan, t)
         if dst is None:
             print(f"  skip      {t.path.name:40s} ({t.note})")
+            # Recorded too, so --reuse-from can honour a deliberate skip
+            # instead of asking again. undo() never looks at this list.
+            skipped.append({"source": str(t.path), "kind": SKIP,
+                            "note": t.note, "size": t.size,
+                            "duration": t.duration})
             continue
         dst = unique(dst)
         rel = dst.relative_to(plan.library)
@@ -843,7 +916,8 @@ def execute(plan: Plan, mode: str, dry_run: bool,
         actions.append({"source": str(t.path), "destination": str(dst),
                         "kind": t.kind, "method": used, "note": t.note,
                         "size": t.size, "duration": t.duration,
-                        "sample_hash": digest, "full_hash": full_verify})
+                        "sample_hash": digest, "full_hash": full_verify,
+                        "extra_type": t.extra_type, "label": t.label})
 
     if dry_run:
         print("\n(dry run — nothing written)")
@@ -863,7 +937,7 @@ def execute(plan: Plan, mode: str, dry_run: bool,
     existing.append({"when": datetime.now().isoformat(timespec="seconds"),
                      "name": plan.name, "tv": plan.tv,
                      "provider_id": plan.provider_id, "disc": plan.disc_label,
-                     "actions": actions})
+                     "actions": actions, "skipped": skipped})
     manifest.write_text(json.dumps(existing, indent=2, ensure_ascii=False))
     print(f"\nDone. Manifest: {manifest}")
     if failures:
@@ -1449,6 +1523,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "alternate cuts, and do not look for a main feature here")
     p.add_argument("--disc-label", metavar="TEXT",
                    help="free-text note recorded in the manifest, e.g. 'Disc 2'")
+    p.add_argument("--reuse-from", type=Path, metavar="FOLDER",
+                   help="take the kinds, types and names decided for FOLDER, matching "
+                        "titles by content — for sorting the same rip into a second "
+                        "library without answering everything again")
     p.add_argument("--ofdb", metavar="REF",
                    help="name the extras from an OFDb release page: give its URL, "
                         "or the two numbers from it as 123456,789012")
@@ -1646,6 +1724,15 @@ def main(argv: List[str]) -> int:
 
     classify(plan, a.runtime, a.min_extra, a.version_ratio, a.dup_tolerance,
              a.dup_seconds)
+
+    if a.reuse_from:
+        # Before the already-placed check, so the decisions are in hand
+        # whether this run places anything or not.
+        source_folder = local_path(a.reuse_from, "--reuse-from")
+        reused = reuse_decisions(plan, source_folder)
+        print(f"Reused {reused} decision(s) from {source_folder.name}."
+              if reused else
+              f"No decisions in {source_folder} matched these titles.")
 
     if not a.force:
         already = mark_already_placed(plan)

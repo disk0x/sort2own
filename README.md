@@ -280,6 +280,27 @@ Alternate cuts are judged against the feature already in the folder, so a
 rather than an extra. Anything the first disc already contributed — the
 trailer, typically — is skipped instead of placed twice.
 
+## Not answering the same questions twice
+
+Every run records what it decided — kind, extras folder, and the name of each
+file — in the `.sort2own.json` alongside the results. `--reuse-from` reads
+those decisions back:
+
+```bash
+# try it locally, settle the ambiguous extras in the TUI
+./sort2own.py ~/rips/A_FILM --library ~/Videos/Sorted --name "A Film (2024)"
+
+# then the real thing, keeping every choice you made
+./sort2own.py ~/rips/A_FILM --library /mnt/movies --name "A Film (2024)" \
+  --reuse-from "~/Videos/Sorted/A Film (2024)"
+```
+
+Titles are matched by content, not by file name, so a re-rip of the same disc
+is recognised too. Deliberate skips are remembered along with the placements.
+
+Re-running against the *same* library needs none of this — anything already
+there is skipped, and anything since deleted is put back.
+
 ## Undoing a run
 
 ```bash
@@ -300,6 +321,7 @@ re-encoded or replaced is reported and left where it is.
 | `--library PATH` | `/media/movies` | root of the Jellyfin library |
 | `--tv-library PATH` | — | separate root used when `--tv` is passed |
 | `--config PATH` | `$XDG_CONFIG_HOME/sort2own/config.toml` | config file |
+| `--reuse-from FOLDER` | — | adopt the kinds, types and names decided for FOLDER |
 | `--name "Title (Year)"` | guessed from the source folder | required with `--yes` |
 | `--tmdb ID` / `--imdb ID` | — | pin the film, e.g. `[tmdbid-112233]` in the folder name |
 | `--tv` | off | treat the disc as TV episodes |
