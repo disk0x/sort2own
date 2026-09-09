@@ -1279,6 +1279,27 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def local_path(value: Path, what: str) -> Path:
+    """
+    Resolve a path the user gave us, refusing URLs.
+
+    `Path("smb://nas/movies")` is not an error to pathlib — it is a *relative*
+    path, so it resolves against the working directory and the rip lands in a
+    folder literally named `smb:`. Silently sorting into the wrong place is
+    the worst outcome available here, so say plainly what is wrong instead.
+
+    Matched against the collapsed form (`smb:/…`), because pathlib has already
+    eaten the second slash by the time argparse hands the Path over.
+    """
+    if re.match(r"[A-Za-z][A-Za-z0-9+.\-]*:/", str(value)):
+        sys.exit(f"{what} looks like a URL: {value}\n"
+                 f"sort2own reads and writes through the filesystem, so a "
+                 f"network share has to be mounted first (fstab, or a systemd "
+                 f".mount unit). Point it at the mount — /mnt/movies, say — "
+                 f"rather than at smb://…")
+    return value.expanduser().resolve()
+
+
 def same_filesystem(a: Path, b: Path) -> bool:
     """Hardlinks only work within one filesystem; compare device IDs."""
     # Walk up until a path exists (the library folder may not exist yet).
@@ -1331,7 +1352,7 @@ def main(argv: List[str]) -> int:
     a = parse_args(argv)
 
     if a.undo:
-        code = undo(a.undo.expanduser().resolve(), a.run, a.all, a.dry_run)
+        code = undo(local_path(a.undo, "--undo"), a.run, a.all, a.dry_run)
         # Removing files leaves the same stale entries a new film does.
         if code == 0 and not a.dry_run:
             refresh_if_configured(a)
@@ -1346,7 +1367,7 @@ def main(argv: List[str]) -> int:
     if a.source is None:
         sys.exit("a source directory is required (or --undo FOLDER)")
 
-    src = a.source.expanduser().resolve()
+    src = local_path(a.source, "the source directory")
     if not src.is_dir():
         sys.exit(f"{src} is not a directory")
     if shutil.which("ffprobe") is None:
@@ -1358,7 +1379,7 @@ def main(argv: List[str]) -> int:
     library = a.tv_library if (a.tv and a.tv_library) else a.library
 
     plan = Plan(name=a.name or guess_name_from_source(src),
-                library=library.expanduser().resolve(),
+                library=local_path(library, "the library path"),
                 tv=a.tv, season=a.season, titles=scan(src),
                 provider_id=provider_id(a.tmdb, a.imdb),
                 supplement=a.supplement, disc_label=a.disc_label or "")

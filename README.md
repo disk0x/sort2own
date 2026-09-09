@@ -278,6 +278,24 @@ re-encoded or replaced is reported and left where it is.
 Environment overrides: `SORT2OWN_LIBRARY`, `SORT2OWN_TV_LIBRARY`,
 `SORT2OWN_JELLYFIN_URL`, `SORT2OWN_JELLYFIN_KEY`, `SORT2OWN_CONFIG`.
 
+## NAS shares
+
+Paths are filesystem paths, so a network share has to be mounted first —
+`smb://nas/movies` is rejected rather than quietly resolved into a local
+folder named `smb:`. In `/etc/fstab`:
+
+```
+//nas/movies  /mnt/movies  cifs  credentials=/root/.smbcred,uid=1000,gid=1000,_netdev  0  0
+```
+
+then point `library` at `/mnt/movies`. A systemd `.mount`/`.automount` unit
+works too, and mounts on first access.
+
+Note that a mounted share is a *different filesystem* from your local rip
+folder, so hardlinking is impossible and `sort2own` will say so rather than
+silently copying — see below. Ripping straight onto the mount avoids that,
+if your server supports hardlinks over SMB.
+
 ## Hardlinks and filesystems
 
 Hardlinking only works when the source and destination are on the **same

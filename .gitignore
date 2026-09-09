@@ -18,6 +18,10 @@ build/
 .coverage
 htmlcov/
 
+# Saved pages used as parser fixtures — someone else's HTML, not ours to
+# redistribute. Tests that need them skip when they are absent.
+tests/fixtures/*.html
+
 # Media test fixtures / scratch libraries (never track real or synthetic rips)
 *.mkv
 *.mp4
