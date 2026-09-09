@@ -56,6 +56,34 @@ probably a trailer — the guess is shown in the TUI as `maybe trailers: …` an
 left in `extras/` until you accept it with `e`. A wrong guess applied silently
 is worse than no guess.
 
+### When the disc kept no labels at all
+
+Most discs don't. Point `--ofdb` at the release's page on
+[OFDb](https://www.ofdb.de/), which lists each extra with its runtime to the
+second, and the names are matched to your files by length:
+
+```bash
+./sort2own.py ~/rips/A_FILM --name "A Film (2024)" \
+  --ofdb 123456,789012
+```
+
+```
+150s  ->  featurettes/Die Story.mkv
+152s  ->  trailers/Trailer.mkv
+172s  ->  scenes/Musikvideo EINE BAND "Hinterm Block".mkv
+137s  ->  OFDb: could be Behind the Scenes / Erster Entwurf
+```
+
+A name is applied only when exactly one listing matches within a second.
+Discs routinely include a trailer reel whose entries share runtimes with the
+real extras, so the rest are shown as candidates for you to pick in the TUI
+rather than guessed at. Unattended runs report the matches but change nothing
+unless you add `--ofdb-apply`.
+
+This lives in `hints_ofdb.py`, apart from the main script, because it parses
+someone else's HTML and that will break one day. Delete the file and
+everything else still works.
+
 ## How it decides
 
 - **Main feature** — the longest title, or (with `--runtime`) whichever

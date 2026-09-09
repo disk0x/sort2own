@@ -91,6 +91,11 @@ import tomllib
 import urllib.error
 import urllib.request
 from collections import Counter
+
+try:
+    import hints_ofdb
+except Exception:        # noqa: BLE001 — a missing or broken sidecar must not
+    hints_ofdb = None    # stop a disc being sorted; hints are advisory only
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
@@ -1046,6 +1051,71 @@ def run_tui(plan: Plan) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Release hints
+# ---------------------------------------------------------------------------
+
+# How close a ripped extra's length must be to a listed one to be the same
+# thing. Near-exact on purpose: listed extras sit as little as two seconds
+# apart, so a wider window makes most of a disc ambiguous rather than more
+# matchable. Measured — see CLAUDE.md §6 item 8.
+HINT_SECONDS = 1.0
+
+
+def hint_cache() -> Path:
+    root = Path(os.environ.get("XDG_CACHE_HOME") or "~/.cache").expanduser()
+    return root / "sort2own" / "ofdb"
+
+
+def apply_release_hints(plan: Plan, ref: str, apply: bool) -> None:
+    """
+    Put the disc's own names to extras, using a release listing.
+
+    Matching is on duration alone, so a name is applied only when exactly one
+    listing fits. Where several fit — a disc's trailer reel routinely repeats
+    the lengths of its featurettes — the candidates go in the note for the
+    user to choose between, because picking one at random is worse than the
+    duration-derived name already there.
+    """
+    if hints_ofdb is None:
+        print("OFDb hints unavailable: hints_ofdb.py is missing or unreadable",
+              file=sys.stderr)
+        return
+    try:
+        listings = hints_ofdb.lookup(ref, hint_cache())
+    except Exception as e:   # noqa: BLE001 — network, HTML and encoding all
+        print(f"OFDb lookup failed: {e}", file=sys.stderr)   # fail the same way
+        return
+    if not listings:
+        print("OFDb listed no extras for that release", file=sys.stderr)
+        return
+
+    timed = [(name, seconds) for name, seconds in listings if seconds is not None]
+    named = ambiguous = 0
+    for t in plan.titles:
+        if t.kind not in (EXTRA, VERSION):
+            continue
+        fits = [name for name, seconds in timed
+                if abs(t.duration - seconds) <= HINT_SECONDS]
+        if not fits:
+            continue
+        if len(fits) > 1:
+            t.note = f"OFDb: could be {' / '.join(fits[:3])}"
+            ambiguous += 1
+            continue
+        t.note = f"OFDb: {fits[0]}"
+        if apply:
+            t.label = safe_name(fits[0]) or t.label
+            folder = match_keyword(fits[0])
+            if folder and t.kind == EXTRA:
+                t.extra_type = folder
+            named += 1
+
+    print(f"OFDb: {len(listings)} extras listed, {named} matched by length"
+          + (f", {ambiguous} ambiguous (see the notes)" if ambiguous else "")
+          + ("" if apply else " — not applied, pass --ofdb-apply"))
+
+
+# ---------------------------------------------------------------------------
 # Jellyfin
 # ---------------------------------------------------------------------------
 
@@ -1226,6 +1296,12 @@ def build_parser() -> argparse.ArgumentParser:
                         "alternate cuts, and do not look for a main feature here")
     p.add_argument("--disc-label", metavar="TEXT",
                    help="free-text note recorded in the manifest, e.g. 'Disc 2'")
+    p.add_argument("--ofdb", metavar="REF",
+                   help="name the extras from an OFDb release page: give its URL, "
+                        "or the two numbers from it as 123456,789012")
+    p.add_argument("--ofdb-apply", action="store_true",
+                   help="with --yes: actually apply the unambiguous OFDb names "
+                        "(without it they are only reported)")
     ids = p.add_mutually_exclusive_group()
     ids.add_argument("--tmdb", metavar="ID",
                      help="TMDB id, appended to the folder name as [tmdbid-ID] so "
@@ -1425,6 +1501,12 @@ def main(argv: List[str]) -> int:
     if mode == "hardlink" and not check_hardlink_feasible(src, plan.library, interactive):
         print("Aborted, nothing written.")
         return 1
+
+    if a.ofdb:
+        # After the feasibility check, so an aborted run costs no page fetch.
+        # In the TUI a match can be applied straight away because the user
+        # sees it and can undo it; unattended, it needs saying so explicitly.
+        apply_release_hints(plan, a.ofdb, apply=interactive or a.ofdb_apply)
 
     if interactive:
         if not run_tui(plan):
