@@ -25,6 +25,23 @@ import sort2own  # noqa: E402
 BYTES_PER_SECOND = 1000
 
 
+@pytest.fixture(autouse=True)
+def isolated_environment(tmp_path, monkeypatch):
+    """
+    Keep the suite away from the machine it runs on: point config discovery
+    at an empty temp home and drop every SORT2OWN_* override. Without this,
+    the day anyone writes a real ~/.config/sort2own/config.toml their library
+    path leaks into these tests.
+    """
+    home = tmp_path / "home"
+    (home / ".config").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
+    for var in list(os.environ):
+        if var.startswith("SORT2OWN_"):
+            monkeypatch.delenv(var)
+
+
 @pytest.fixture
 def src_dir(tmp_path):
     d = tmp_path / "rip"

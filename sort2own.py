@@ -45,8 +45,17 @@ TWO WAYS TO RUN IT
   In unattended mode the heuristics decide everything. In the TUI you see the
   heuristics' proposal and can override any title with a few keystrokes.
 
+CONFIGURATION
+  Anything you would otherwise repeat on every run — the library path, the
+  thresholds, Jellyfin credentials — can live in a config file:
+      ~/.config/sort2own/config.toml   (or --config, or $SORT2OWN_CONFIG)
+  A command-line flag beats an environment variable, which beats the config
+  file, which beats the built-in default.
+
 DEPENDENCIES
-  Python 3.8+ and `ffprobe` (part of ffmpeg). Nothing else.
+  Python 3.11+ (for tomllib) and `ffprobe` (part of ffmpeg). Nothing else.
+  Deliberately one file: copy it to the NAS or into an ARM container and run
+  it — there is nothing to install.
 
 HOW THE HEURISTICS WORK  (see classify())
   1. Every title's duration, size, chapter count and embedded title tag are
@@ -77,6 +86,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
@@ -854,10 +864,101 @@ def run_tui(plan: Plan) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+# Settings the config file may carry that are not command-line flags: a key
+# read from a separate file (so it need not sit in the config itself), and
+# the TMDB key, reserved for the search feature.
+CONFIG_ONLY_KEYS = {"jellyfin_key_file", "tmdb_key"}
+
+# Environment overrides, by the argparse destination they fill in.
+ENV_VARS = {
+    "library": "SORT2OWN_LIBRARY",
+    "tv_library": "SORT2OWN_TV_LIBRARY",
+    "jellyfin_url": "SORT2OWN_JELLYFIN_URL",
+    "jellyfin_key": "SORT2OWN_JELLYFIN_KEY",
+}
+
+
+def config_path(argv: List[str]) -> Optional[Path]:
+    """
+    Locate the config file. It has to be read before the real parser exists,
+    because its values become that parser's defaults — hence the throwaway
+    parser that knows only --config.
+
+    A file named explicitly must exist; the default location simply not being
+    there is the normal case and stays quiet.
+    """
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--config", type=Path)
+    named = pre.parse_known_args(argv)[0].config
+    if named is None and os.environ.get("SORT2OWN_CONFIG"):
+        named = Path(os.environ["SORT2OWN_CONFIG"])
+    if named is not None:
+        named = named.expanduser()
+        if not named.is_file():
+            sys.exit(f"config file not found: {named}")
+        return named
+
+    home = Path(os.environ.get("XDG_CONFIG_HOME") or "~/.config").expanduser()
+    default = home / "sort2own" / "config.toml"
+    return default if default.is_file() else None
+
+
+def load_config(path: Optional[Path], known: set) -> dict:
+    """
+    Read the config into argparse defaults. A `[section] key` becomes
+    `section_key`.
+
+    A broken or misspelt config is fatal, unlike a broken manifest: the
+    manifest is history we can do without, but this is the user stating how
+    the run should behave, and quietly ignoring it would place files
+    somewhere they did not ask for.
+    """
+    if path is None:
+        return {}
+    try:
+        with path.open("rb") as f:
+            raw = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        sys.exit(f"cannot read config {path}: {e}")
+
+    flat = {}
+    for key, value in raw.items():
+        if isinstance(value, dict):
+            for sub, subvalue in value.items():
+                flat[f"{key}_{sub}"] = subvalue
+        else:
+            flat[key] = value
+
+    unknown = sorted(set(flat) - known - CONFIG_ONLY_KEYS)
+    if unknown:
+        sys.exit(f"unknown setting(s) in {path}: {', '.join(unknown)}")
+
+    if "jellyfin_key_file" in flat:
+        if "jellyfin_key" in flat:
+            sys.exit(f"{path}: set jellyfin.key or jellyfin.key_file, not both")
+        key_file = Path(str(flat.pop("jellyfin_key_file"))).expanduser()
+        try:
+            flat["jellyfin_key"] = key_file.read_text().strip()
+        except OSError as e:
+            sys.exit(f"cannot read jellyfin.key_file {key_file}: {e}")
+
+    return {k: v for k, v in flat.items() if k in known}
+
+
+def env_config(known: set) -> dict:
+    """Settings taken from the environment; these outrank the config file."""
+    return {dest: os.environ[var] for dest, var in ENV_VARS.items()
+            if dest in known and os.environ.get(var)}
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
-def parse_args(argv: List[str]) -> argparse.Namespace:
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Sort MakeMKV output into a Jellyfin-friendly folder layout (non-destructive).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -868,8 +969,14 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
                "  %(prog)s --undo '/media/movies/A Film (2024)'\n")
     p.add_argument("source", type=Path, nargs="?",
                    help="directory containing MakeMKV's *.mkv output")
-    p.add_argument("--library", type=Path, default=Path(os.environ.get("SORT2OWN_LIBRARY", "/media/movies")),
-                   help="root of the Jellyfin library (default: $SORT2OWN_LIBRARY or /media/movies)")
+    p.add_argument("--library", type=Path, default=Path("/media/movies"),
+                   help="root of the Jellyfin library (default: /media/movies)")
+    p.add_argument("--tv-library", type=Path,
+                   help="separate library root used when --tv is given on the command "
+                        "line (toggling t in the TUI does not switch libraries)")
+    p.add_argument("--config", type=Path, metavar="PATH",
+                   help="config file (default: $SORT2OWN_CONFIG or "
+                        "$XDG_CONFIG_HOME/sort2own/config.toml)")
     p.add_argument("--name", help='"Title (Year)"; required with --yes, guessed otherwise')
     p.add_argument("--tv", action="store_true", help="treat the disc as TV episodes")
     p.add_argument("--season", type=int, default=1, help="season number for --tv (default 1)")
@@ -905,6 +1012,26 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
                        help="with --undo: undo run N (0-based; default is the last one left)")
     which.add_argument("--all", action="store_true",
                        help="with --undo: undo every recorded run")
+    p.add_argument("--jellyfin-url", metavar="URL",
+                   help="Jellyfin server to ask for a library scan after a run")
+    p.add_argument("--jellyfin-key", metavar="KEY",
+                   help="Jellyfin API key; prefer jellyfin.key_file in the config "
+                        "so it stays out of your shell history")
+    return p
+
+
+def parse_args(argv: List[str]) -> argparse.Namespace:
+    """
+    Build the parser, then layer the defaults under it:
+    built-in < config file < environment < command line.
+    """
+    p = build_parser()
+    # Every destination the parser knows, without reaching into its internals.
+    known = set(vars(p.parse_known_args([])[0]))
+
+    defaults = load_config(config_path(argv), known)
+    defaults.update(env_config(known))
+    p.set_defaults(**defaults)
     return p.parse_args(argv)
 
 
@@ -972,8 +1099,13 @@ def main(argv: List[str]) -> int:
     if shutil.which("ffprobe") is None:
         sys.exit("ffprobe not found — install ffmpeg")
 
+    # TV shows and films normally live in separate Jellyfin libraries. This is
+    # settled once, here, because check_hardlink_feasible() and the TUI both
+    # depend on it — toggling t in the TUI does not move the library.
+    library = a.tv_library if (a.tv and a.tv_library) else a.library
+
     plan = Plan(name=a.name or guess_name_from_source(src),
-                library=a.library.expanduser().resolve(),
+                library=library.expanduser().resolve(),
                 tv=a.tv, season=a.season, titles=scan(src),
                 provider_id=provider_id(a.tmdb, a.imdb))
     classify(plan, a.runtime, a.min_extra, a.version_ratio, a.dup_tolerance)
