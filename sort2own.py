@@ -87,6 +87,8 @@ import shutil
 import subprocess
 import sys
 import tomllib
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
@@ -149,6 +151,13 @@ class Title:
     @property
     def gib(self) -> str:
         return f"{self.size / 2**30:.2f}G"
+
+
+@dataclass
+class Outcome:
+    """What a run actually did, so the caller can react to it."""
+    placed: int = 0
+    failures: int = 0
 
 
 @dataclass
@@ -544,11 +553,9 @@ def place(src: Path, dst: Path, mode: str) -> str:
     return "copy"
 
 
-def execute(plan: Plan, mode: str, dry_run: bool, full_verify: bool = False) -> int:
-    """
-    Apply the plan and write a manifest so every action is auditable.
-    Returns the number of files that failed verification.
-    """
+def execute(plan: Plan, mode: str, dry_run: bool,
+            full_verify: bool = False) -> Outcome:
+    """Apply the plan and write a manifest so every action is auditable."""
     actions = []
     failures = 0
     for t in plan.titles:
@@ -582,7 +589,7 @@ def execute(plan: Plan, mode: str, dry_run: bool, full_verify: bool = False) -> 
 
     if dry_run:
         print("\n(dry run — nothing written)")
-        return 0
+        return Outcome()
 
     # Manifest: lets you see later exactly where each disc title went.
     root = library_root(plan)
@@ -603,7 +610,7 @@ def execute(plan: Plan, mode: str, dry_run: bool, full_verify: bool = False) -> 
     if failures:
         print(f"{failures} file(s) failed verification and were removed; the "
               f"sources are untouched, so re-running is safe.", file=sys.stderr)
-    return failures
+    return Outcome(placed=len(actions), failures=failures)
 
 
 # ---------------------------------------------------------------------------
@@ -864,6 +871,59 @@ def run_tui(plan: Plan) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Jellyfin
+# ---------------------------------------------------------------------------
+
+def jellyfin_refresh(url: str, key: str, timeout: float = 10.0) -> Optional[str]:
+    """
+    Ask Jellyfin to scan its libraries, so a new film shows up now instead of
+    whenever the scheduled task next runs. Returns None on success, or a short
+    reason — never the key, which must not reach a log.
+
+    A whole-library scan is heavy, but the targeted /Items/{id}/Refresh needs
+    an item ID, and a folder Jellyfin has never seen does not have one yet.
+    """
+    if any(c == '"' or ord(c) < 0x20 for c in key):
+        return "the API key contains characters that cannot go in a header"
+
+    request = urllib.request.Request(
+        url.rstrip("/") + "/Library/Refresh", data=b"", method="POST")
+    # The legacy X-Emby-Token header and api_key query parameter were removed
+    # in Jellyfin 12. Some versions want Client alongside Token, so send the
+    # full set (jellyfin/jellyfin#12990).
+    request.add_header("Authorization",
+                       'MediaBrowser Client="sort2own", Device="sort2own", '
+                       f'DeviceId="sort2own", Version="1.0", Token="{key}"')
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            if response.status not in (200, 204):
+                return f"HTTP {response.status}"
+    except urllib.error.HTTPError as e:
+        return f"HTTP {e.code}"
+    except (urllib.error.URLError, OSError) as e:
+        return str(getattr(e, "reason", e))
+    return None
+
+
+def refresh_if_configured(a: argparse.Namespace) -> None:
+    """
+    Trigger a scan when the user has configured one. Always advisory: the
+    files are already in place, so a refresh that fails is a warning and
+    never changes the exit code.
+    """
+    if not a.jellyfin_url:
+        return
+    if not a.jellyfin_key:
+        print("Jellyfin refresh skipped: no API key configured", file=sys.stderr)
+        return
+    problem = jellyfin_refresh(a.jellyfin_url, a.jellyfin_key)
+    if problem:
+        print(f"Jellyfin refresh failed: {problem}", file=sys.stderr)
+    else:
+        print("Jellyfin scan triggered")
+
+
+# ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
@@ -1087,7 +1147,11 @@ def main(argv: List[str]) -> int:
     a = parse_args(argv)
 
     if a.undo:
-        return undo(a.undo.expanduser().resolve(), a.run, a.all, a.dry_run)
+        code = undo(a.undo.expanduser().resolve(), a.run, a.all, a.dry_run)
+        # Removing files leaves the same stale entries a new film does.
+        if code == 0 and not a.dry_run:
+            refresh_if_configured(a)
+        return code
     if (a.run is not None or a.all) and not a.undo:
         sys.exit("--run and --all only apply to --undo")
     if a.source is None:
@@ -1131,7 +1195,10 @@ def main(argv: List[str]) -> int:
         sys.exit("--yes requires --name 'Title (Year)' (a guessed name is too risky unattended)")
 
     print(f"\n{'TV' if plan.tv else 'Movie'}: {plan.name}   library: {plan.library}   method: {mode}\n")
-    return 1 if execute(plan, mode, a.dry_run, a.verify == "full") else 0
+    outcome = execute(plan, mode, a.dry_run, a.verify == "full")
+    if outcome.placed and not a.dry_run:
+        refresh_if_configured(a)
+    return 1 if outcome.failures else 0
 
 
 if __name__ == "__main__":

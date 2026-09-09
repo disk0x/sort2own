@@ -109,7 +109,7 @@ def break_copies(monkeypatch, when=lambda dst: True):
 
 def test_a_sound_copy_is_recorded_with_its_fingerprint(make_plan):
     plan = a_plan(make_plan)
-    assert sort2own.execute(plan, "copy", False) == 0
+    assert sort2own.execute(plan, "copy", False) == sort2own.Outcome(placed=2)
     runs = json.loads((sort2own.library_root(plan)
                        / sort2own.MANIFEST_NAME).read_text())
     for action in runs[0]["actions"]:
@@ -129,7 +129,8 @@ def test_hardlinks_are_fingerprinted_too(make_plan):
 def test_a_bad_copy_is_removed_and_counted(make_plan, monkeypatch):
     plan = a_plan(make_plan)
     break_copies(monkeypatch, when=lambda dst: dst.name.startswith("A Film"))
-    assert sort2own.execute(plan, "copy", False) == 1
+    outcome = sort2own.execute(plan, "copy", False)
+    assert (outcome.failures, outcome.placed) == (1, 1)
 
     root = sort2own.library_root(plan)
     assert not (root / "A Film (2024).mkv").exists()
