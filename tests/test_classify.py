@@ -48,6 +48,33 @@ def test_duplicate_of_an_earlier_title_is_skipped(make_plan):
     assert ts[1].note == "duplicate of Film_t00.mkv"
 
 
+def test_a_one_frame_difference_is_still_a_duplicate(make_plan):
+    """A second playlist over the same content, off by a frame."""
+    ts = classify(make_plan([{"duration": 7200.0, "size": 3433},
+                             {"duration": 7200.04, "size": 3433}]))
+    assert ts[1].kind == SKIP
+
+
+def test_real_episodes_are_not_mistaken_for_each_other(make_plan):
+    """
+    Regression: a relative tolerance made 1% of a 45-minute episode 27
+    seconds wide, so three of these four were silently dropped as duplicates
+    of the first — a whole disc reduced to one episode.
+    """
+    plan = make_plan([{"duration": d} for d in (2712, 2698, 2705, 2721)],
+                     name="A Series (2016)", tv=True)
+    ts = classify(plan)
+    assert [t.kind for t in ts] == [EPISODE] * 4
+    assert [t.label for t in ts] == ["1", "2", "3", "4"]
+
+
+def test_an_alternate_cut_is_not_a_duplicate(make_plan):
+    """118 minutes against 120 is a different cut, not the same content."""
+    ts = classify(make_plan([{"duration": 7200}, {"duration": 7080}]))
+    assert ts[0].kind == MAIN
+    assert ts[1].kind == VERSION
+
+
 def test_extra_is_named_from_its_title_tag(make_plan):
     ts = classify(make_plan([{"duration": 7200}, {"duration": 300,
                                                   "tag": "Trailer"}]))

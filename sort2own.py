@@ -64,8 +64,9 @@ HOW THE HEURISTICS WORK  (see classify())
      given, in which case it is the title whose length is closest to the
      stated runtime (protects against "play all extras" titles and against
      picking the wrong cut).
-  3. Titles of near-identical length and size to another title are duplicates
-     (multi-angle / language-variant playlists) and are skipped.
+  3. Titles matching another title's length to within a couple of seconds and
+     its size to within a percent are the same content reached by a second
+     playlist (multi-angle / language variants) and are skipped.
   4. Titles almost as long as the main feature (>= --version-ratio of it) are
      alternative cuts and become Jellyfin "versions".
   5. Titles shorter than --min-extra are menu loops / logos and are skipped.
@@ -266,7 +267,8 @@ def guess_name_from_source(src: Path) -> str:
 
 
 def classify(plan: Plan, runtime_min: Optional[int], min_extra: int,
-             version_ratio: float, dup_tolerance: float) -> None:
+             version_ratio: float, dup_tolerance: float,
+             dup_seconds: float = 2.0) -> None:
     """
     Fill in kind / extra_type / label / note for every title.
     Runs on the raw scan; the TUI lets the user override afterwards.
@@ -275,14 +277,21 @@ def classify(plan: Plan, runtime_min: Optional[int], min_extra: int,
     for t in ts:                      # reset, so the function is idempotent
         t.kind, t.label, t.note = EXTRA, "", ""
 
-    # --- 3. duplicates: same length (±tolerance) and same size (±tolerance) --
+    # --- 3. duplicates: the same content exposed by two playlists ------------
+    # Length is matched in absolute seconds, not as a fraction: a duplicate is
+    # the same frames, so its duration is identical to well under a second,
+    # while a percentage window grows with the runtime. At 1% a 45-minute
+    # episode matched anything within 27 seconds, which quietly swallowed the
+    # other episodes on a TV disc. Getting this wrong in the loose direction
+    # destroys a real title silently; too tight merely leaves a visible extra
+    # copy, so it errs tight.
     for i, a in enumerate(ts):
         for b in ts[:i]:
             if b.kind == SKIP:
                 continue
-            close_dur = abs(a.duration - b.duration) <= dup_tolerance * max(b.duration, 1)
-            close_size = abs(a.size - b.size) <= dup_tolerance * max(b.size, 1)
-            if close_dur and close_size:
+            same_length = abs(a.duration - b.duration) <= dup_seconds
+            same_size = abs(a.size - b.size) <= dup_tolerance * max(b.size, 1)
+            if same_length and same_size:
                 a.kind, a.note = SKIP, f"duplicate of {b.path.name}"
                 break
 
@@ -1053,7 +1062,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version-ratio", type=float, default=0.85,
                    help="titles at least this fraction of the main length are alternate cuts (default 0.85)")
     p.add_argument("--dup-tolerance", type=float, default=0.01,
-                   help="duration/size tolerance for duplicate detection (default 0.01 = 1%%)")
+                   help="size tolerance for duplicate detection (default 0.01 = 1%%)")
+    p.add_argument("--dup-seconds", type=float, default=2.0, metavar="SEC",
+                   help="how close two titles' lengths must be to count as the "
+                        "same content (default 2.0 seconds)")
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--copy", action="store_true", help="always copy (default: hardlink, copy if not possible)")
     mode.add_argument("--move", action="store_true", help="move files instead of linking (still never overwrites)")
@@ -1172,7 +1184,8 @@ def main(argv: List[str]) -> int:
                 library=library.expanduser().resolve(),
                 tv=a.tv, season=a.season, titles=scan(src),
                 provider_id=provider_id(a.tmdb, a.imdb))
-    classify(plan, a.runtime, a.min_extra, a.version_ratio, a.dup_tolerance)
+    classify(plan, a.runtime, a.min_extra, a.version_ratio, a.dup_tolerance,
+             a.dup_seconds)
 
     if not a.force:
         already = mark_already_placed(plan)
