@@ -27,6 +27,10 @@ scratch/
 # sort2own manifest (should only ever live in a destination library, never the repo)
 .sort2own.json
 
+# Claude Code local state (per-machine settings, runtime lock)
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
 # Editor / OS noise
 .vscode/
 .idea/
