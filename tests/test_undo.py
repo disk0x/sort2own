@@ -84,10 +84,19 @@ def test_all_undoes_every_run(make_plan):
 
 def test_run_selects_an_earlier_one(make_plan):
     plan, folder = sorted_rip(make_plan)
-    sorted_rip(make_plan)
+
+    # A second, genuinely separate run: its own file, so undoing the first
+    # leaves the folder standing.
+    later = make_plan([{"duration": 600, "tag": "Making of",
+                        "name": "Second_t00.mkv"}])
+    later.titles[0].kind = sort2own.EXTRA
+    later.titles[0].label, later.titles[0].extra_type = "Making of", "featurettes"
+    sort2own.execute(later, "copy", False)
+
     sort2own.undo(folder, 0, False, False)
     assert runs_of(folder)[0].get("undone")
     assert not runs_of(folder)[1].get("undone")
+    assert (folder / "featurettes" / "Making of.mkv").exists()
 
 
 def test_an_out_of_range_run_is_rejected(make_plan):

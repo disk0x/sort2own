@@ -185,7 +185,13 @@ def test_a_corrupt_manifest_does_not_stop_a_run(make_rip, src_dir, library):
     (library / "Test Film (2024)"
      / sort2own.MANIFEST_NAME).write_text("truncated…")
     assert run(src_dir, library) == 0
-    assert list(library.rglob("* (2).mkv"))    # history lost, so it re-places
+    # The history is gone, but the files themselves are still recognisable at
+    # their destinations, so they are adopted rather than transferred again.
+    assert not list(library.rglob("* (2).mkv"))
+    assert [a["method"] for a in
+            json.loads((library / "Test Film (2024)"
+                        / sort2own.MANIFEST_NAME).read_text())[0]["actions"]
+            ] == ["adopted"]
 
 
 def test_a_corrupt_manifest_is_kept_not_overwritten(make_rip, src_dir,

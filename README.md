@@ -301,6 +301,12 @@ is recognised too. Deliberate skips are remembered along with the placements.
 Re-running against the *same* library needs none of this — anything already
 there is skipped, and anything since deleted is put back.
 
+A file that is already sitting at its destination and matches the source
+byte-for-byte is adopted rather than transferred again, even if `sort2own` has
+no record of putting it there. So a run interrupted halfway through a large
+copy can simply be repeated: it picks up where it left off instead of sending
+30 GB over the network a second time.
+
 ## Undoing a run
 
 ```bash

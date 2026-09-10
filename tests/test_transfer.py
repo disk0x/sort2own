@@ -184,3 +184,65 @@ def test_a_whole_run_survives_a_share_that_refuses_chmod(make_rip, src_dir,
                           "--copy", "--min-extra", "1",
                           "--name", "A Film (2024)"]) == 0
     assert (library / "A Film (2024)" / "A Film (2024).mkv").exists()
+
+
+# --- adopting what is already there ----------------------------------------
+
+def placed(make_plan):
+    plan = make_plan([{"duration": 7200}, {"duration": 300, "tag": "Trailer"}])
+    sort2own.classify(plan, None, 90, 0.85, 0.01)
+    return plan, sort2own.library_root(plan)
+
+
+def test_an_identical_file_at_the_destination_is_not_transferred_again(make_plan):
+    """
+    The case this exists for: a crash after a 31 GB copy left the file on the
+    NAS with no manifest. Re-running must recognise it, not send it again.
+    """
+    plan, folder = placed(make_plan)
+    main = plan.titles[0]
+    target = folder / "A Film (2024).mkv"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(main.path.read_bytes())      # as a crashed run left it
+
+    outcome = sort2own.execute(plan, "copy", False)
+    assert outcome.failures == 0
+    assert not list(folder.glob("* (2).mkv"))
+
+    import json
+    run = json.loads((folder / sort2own.MANIFEST_NAME).read_text())[0]
+    adopted = [a for a in run["actions"] if a["method"] == "adopted"]
+    assert [a["kind"] for a in adopted] == ["main"]
+
+
+def test_a_different_file_at_the_destination_is_left_alone(make_plan):
+    plan, folder = placed(make_plan)
+    target = folder / "A Film (2024).mkv"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"someone else's encode")
+
+    sort2own.execute(plan, "copy", False)
+    assert target.read_bytes() == b"someone else's encode"
+    assert (folder / "A Film (2024) (2).mkv").exists()
+
+
+def test_force_transfers_even_over_an_identical_file(make_plan):
+    plan, folder = placed(make_plan)
+    target = folder / "A Film (2024).mkv"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(plan.titles[0].path.read_bytes())
+
+    sort2own.execute(plan, "copy", False, adopt=False)
+    assert (folder / "A Film (2024) (2).mkv").exists()
+
+
+def test_undo_leaves_an_adopted_file_where_it_found_it(make_plan):
+    """It was there before the run, so putting things back means leaving it."""
+    plan, folder = placed(make_plan)
+    target = folder / "A Film (2024).mkv"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(plan.titles[0].path.read_bytes())
+
+    sort2own.execute(plan, "copy", False)
+    assert sort2own.undo(folder, None, False, False) == 0
+    assert target.exists()                          # not ours to remove

@@ -898,9 +898,14 @@ def place(src: Path, dst: Path, mode: str, progress: bool = False) -> str:
     return "copy"
 
 
-def execute(plan: Plan, mode: str, dry_run: bool,
-            full_verify: bool = False) -> Outcome:
-    """Apply the plan and write a manifest so every action is auditable."""
+def execute(plan: Plan, mode: str, dry_run: bool, full_verify: bool = False,
+            adopt: bool = True) -> Outcome:
+    """
+    Apply the plan and write a manifest so every action is auditable.
+
+    `adopt`: when the destination already holds this exact content, record it
+    and move on rather than transferring it again.
+    """
     actions, skipped = [], []
     failures = 0
     for t in plan.titles:
@@ -913,6 +918,24 @@ def execute(plan: Plan, mode: str, dry_run: bool,
                             "note": t.note, "size": t.size,
                             "duration": t.duration})
             continue
+        # Something already at the exact destination, byte-for-byte identical
+        # to the source, is this title — however it got there. Re-transferring
+        # it would mean another 30 GB across the network to produce a " (2)"
+        # nobody wants. Proved with the same check that accepts a fresh copy.
+        if adopt and dst.exists():
+            already, digest = verify_copy(t.path, dst, t.size, full_verify)
+            if already is None:
+                rel = dst.relative_to(plan.library)
+                print(f"  adopted   {t.path.name:40s} → {rel} (already there)")
+                if not dry_run:
+                    actions.append({"source": str(t.path), "destination": str(dst),
+                                    "kind": t.kind, "method": "adopted",
+                                    "note": t.note, "size": t.size,
+                                    "duration": t.duration, "sample_hash": digest,
+                                    "full_hash": full_verify,
+                                    "extra_type": t.extra_type, "label": t.label})
+                continue
+
         dst = unique(dst)
         rel = dst.relative_to(plan.library)
         if dry_run:
@@ -989,6 +1012,11 @@ def undo_action(action: dict, folder: Path, dry_run: bool) -> Tuple[str, bool]:
 
     if not dst.exists():
         return f"already gone  {name}", True
+
+    if method == "adopted":
+        # It was there before the run and was left alone, so putting things
+        # back means leaving it alone again. Not a refusal: nothing to undo.
+        return f"left alone    {name} (was already there)", True
 
     if method == "move":
         # Moving back cannot destroy anything, so the only question is whether
@@ -1782,7 +1810,8 @@ def main(argv: List[str]) -> int:
         sys.exit("--yes requires --name 'Title (Year)' (a guessed name is too risky unattended)")
 
     print(f"\n{'TV' if plan.tv else 'Movie'}: {plan.name}   library: {plan.library}   method: {mode}\n")
-    outcome = execute(plan, mode, a.dry_run, a.verify == "full")
+    outcome = execute(plan, mode, a.dry_run, a.verify == "full",
+                      adopt=not a.force)
     if outcome.placed and not a.dry_run:
         refresh_if_configured(a)
     return 1 if outcome.failures else 0
