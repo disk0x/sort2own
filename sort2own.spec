@@ -7,18 +7,21 @@
 #     make dist && cp sort2own-*.tar.gz ~/rpmbuild/SOURCES/
 #     rpmbuild -ba sort2own.spec
 #
-# NOTE: this spec has not been built or rpmlint-ed — it was written in an
-# environment with no rpm tooling. Expect to iterate on the first build.
+# The test suite needs python3-pytest. To build without it:
+#     rpmbuild -ba --without check sort2own.spec
+%bcond_without check
 
 # The package installs a plain script, not an importable module, so there is
 # nothing for Fedora's automatic byte-compilation to do outside sitelib. Say
-# so explicitly: otherwise a generated __pycache__ under %{_datadir} shows up
-# as an unpackaged file and fails the build.
+# so explicitly: otherwise a generated __pycache__ under the data directory
+# would show up as an unpackaged file and fail the build.
+# (Macro names are spelled out in words in these comments on purpose — rpm
+# expands macros inside comments too, and warns each time it does.)
 %global _python_bytecompile_extra 0
 
 Name:           sort2own
 Version:        1.0.0
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Sort MakeMKV disc rips into a Jellyfin-ready library
 
 License:        AGPL-3.0-or-later
@@ -27,8 +30,13 @@ Source0:        %{name}-%{version}.tar.gz
 
 BuildArch:      noarch
 BuildRequires:  make
-BuildRequires:  python3-devel >= 3.11
+# python3, not python3-devel: nothing here is compiled or installed into
+# sitelib, so the python rpm macros are not needed and pulling in the devel
+# stack for a single script would be gratuitous.
+BuildRequires:  python3 >= 3.11
+%if %{with check}
 BuildRequires:  python3-pytest
+%endif
 
 # 3.11 is the floor: the config loader uses stdlib tomllib.
 Requires:       python3 >= 3.11
@@ -58,13 +66,22 @@ a manifest that %{name} --undo can reverse.
 %install
 %make_install PREFIX=%{_prefix}
 
+%if %{with check}
 %check
 # Runs without ffmpeg present: the fixtures that need it skip themselves, so
-# this passes in a clean mock chroot.
-%{python3} -m pytest -q
+# this passes in a clean mock chroot. Plain python3 rather than the python
+# rpm macro, which only exists when python3-devel is installed.
+python3 -m pytest -q
+%endif
 
 %files
+# Absolute paths, because the Makefile has already put these in the buildroot;
+# the relative "%%license LICENSE" form would install a second copy and leave
+# the Makefile's as an unpackaged file. The %%dir lines keep every directory
+# this package creates owned by it.
+%dir %{_datadir}/licenses/%{name}
 %license %{_datadir}/licenses/%{name}/LICENSE
+%dir %{_datadir}/doc/%{name}
 %doc %{_datadir}/doc/%{name}/README.md
 %{_bindir}/%{name}
 %dir %{_datadir}/%{name}
@@ -72,6 +89,13 @@ a manifest that %{name} --undo can reverse.
 %{_datadir}/%{name}/hints_ofdb.py
 
 %changelog
+* Thu Sep 10 2026 dkr <19468139+disk0x@users.noreply.github.com> - 1.0.0-2
+- Drop the python3-devel build dependency; nothing here needs the python rpm
+  macros, and %%{python3} in %%check was the only thing that did.
+- Make the test suite optional: build with --without check to skip it and its
+  python3-pytest dependency.
+- Stop rpm warning about macros expanded inside comments.
+
 * Thu Sep 10 2026 dkr <19468139+disk0x@users.noreply.github.com> - 1.0.0-1
 - First packaged release.
 - Adds __version__, a --version flag, and a version field in each manifest run.
