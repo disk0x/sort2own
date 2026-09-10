@@ -1,0 +1,4 @@
+# Keep editor/agent state out of `make dist` tarballs (git archive honours this).
+.claude/         export-ignore
+.gitattributes   export-ignore
+.gitignore       export-ignore

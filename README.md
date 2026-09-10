@@ -159,6 +159,33 @@ cd sort2own
 chmod +x sort2own.py
 ```
 
+If you also want `hints_ofdb.py` (optional OFDb extras naming), keep it in the
+same directory as `sort2own.py` — it is imported by name, and nothing else
+changes if it is absent.
+
+### Installing it properly
+
+```bash
+sudo make install              # /usr/share/sort2own + /usr/bin/sort2own
+make install PREFIX=~/.local   # or a home install, no root needed
+sudo make uninstall
+```
+
+### Fedora / RPM
+
+```bash
+make dist
+rpmbuild -ta sort2own-*.tar.gz
+sudo dnf install ~/rpmbuild/RPMS/noarch/sort2own-*.rpm
+```
+
+The package is `noarch` and depends on `python3 >= 3.11` and `/usr/bin/ffprobe`
+— a file dependency, so either RPM Fusion's `ffmpeg` or Fedora's own
+`ffmpeg-free` satisfies it.
+
+`sort2own --version` reports the build, and every run records it in the
+manifest, so a folder sorted months ago can say what laid it out.
+
 ## Usage
 
 ### Interactive (recommended for discs you haven't sorted before)
