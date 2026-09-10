@@ -50,11 +50,10 @@ A title the length of the feature carrying an audio track named
 *Audiokommentar* becomes a Jellyfin version called "Commentary" rather than an
 extra, which is what it actually is.
 
-Only labels the disc itself supplies are acted on. Where the shape of a file
-merely hints — something short with one audio track and no subtitles is
-probably a trailer — the guess is shown in the TUI as `maybe trailers: …` and
-left in `extras/` until you accept it with `e`. A wrong guess applied silently
-is worse than no guess.
+Only labels the disc itself supplies are acted on. Weak signals — an extra
+whose audio is in a language the feature doesn't have, say — are shown in the
+TUI marked `?` and left in `extras/` until you accept them with `e`. A wrong
+guess applied silently is worse than no guess.
 
 ### When the disc kept no labels at all
 
@@ -126,8 +125,10 @@ fixed by hand in the interactive mode below.
   by default — instant, and using no extra disk space — or copied if the
   library is on a different filesystem (see [Hardlinks](#hardlinks-and-filesystems)
   below).
-- Existing files at the destination are **never overwritten** — a
-  colliding name gets a `(2)` suffix instead.
+- Existing files at the destination are **never overwritten** — a colliding
+  name gets a `(2)` suffix instead. A file that already matches the source
+  byte-for-byte is adopted rather than sent again, so an interrupted transfer
+  can just be re-run.
 - Every run is logged to a `.sort2own.json` manifest in the movie folder,
   so you can see exactly what was placed and how.
 - **Running it twice does nothing the second time.** Anything an earlier run
