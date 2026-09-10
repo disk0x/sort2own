@@ -27,6 +27,11 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+# Bump whenever the parser changes what it extracts. Cached results are keyed
+# on it, so a fix reaches anyone who already looked a release up — otherwise a
+# bad parse is served from disk forever and looks like the bug was never fixed.
+CACHE_VERSION = 2
+
 BASE = "https://www.ofdb.de/fassung/"
 USER_AGENT = "sort2own (personal media sorter; one page per run, cached)"
 TIMEOUT = 15.0
@@ -46,34 +51,62 @@ class _ExtrasParser(HTMLParser):
     """
     Pull the Extras list out of a Fassung page.
 
-    The page labels each section with a bold heading and follows it with a
-    sibling div of single-item lists:
+    There is no consistent markup for an extra, so this does not look for one.
+    Releases differ wildly:
 
-        <b>Extras:</b> … <div class="… fassung-absatz">
-            <ul><li>Die Story (2:30 Min.)</li></ul>
-            <ul><li>Trailershow</li></ul>
-            <ol><li>Erster Entwurf (2:17 Min.)</li>…</ol>
+        <b>Extras:</b> … <div class="… fassung-absatz">      ← the block
+            <strong>Featurettes:</strong>                     ← a sub-heading
+            <ul><li>Filming Zone (32:02 Min.) **</li></ul>    ← a list item
+            <strong>Kinotrailer </strong>(1:17 Min.) ***      ← bare text
+            <div><em>* = englisch …</em></div>                ← footnote legend
 
-    Rather than track that div nesting — which is malformed anyway, the page
-    never closes its <p> tags — this waits for the "Extras:" heading, takes
-    every <li> after it, and stops at the next heading.
+    So: find the block that follows the "Extras:" heading, split its text into
+    lines on the block-level tags, and keep a line if it carries a runtime or
+    came from a list item. Everything else — sub-headings, the footnote
+    legend, stray whitespace — falls away without needing to be recognised.
+
+    Matching on element type instead missed both of that page's bare-text
+    entries, and stopping at the next bold heading would have stopped at
+    "Featurettes:". The block boundary is the only reliable landmark, so it
+    counts div depth rather than guessing.
     """
+
+    BREAKS = {"br", "li", "p", "ul", "ol", "div", "table", "tr", "h1", "h2",
+              "h3", "h4"}
 
     def __init__(self) -> None:
         super().__init__()
         self.items: List[str] = []
         self._heading: Optional[List[str]] = None
-        self._item: Optional[List[str]] = None
-        self._collecting = False
+        self._awaiting_block = False
+        self._depth = 0                  # div nesting inside the extras block
+        self._line: List[str] = []
+        self._in_item = False
         self._finished = False
+
+    def _flush(self) -> None:
+        text = re.sub(r"\s+", " ", "".join(self._line)).strip()
+        if text and (self._in_item or RUNTIME.search(text)):
+            self.items.append(text)
+        self._line = []
 
     def handle_starttag(self, tag: str, attrs) -> None:
         if self._finished:
             return
         if tag == "b":
             self._heading = []
-        elif tag == "li" and self._collecting:
-            self._item = []
+            return
+        if self._awaiting_block and tag == "div":
+            self._awaiting_block, self._depth = False, 1
+            return
+        if not self._depth:
+            return
+        if tag in self.BREAKS:
+            self._flush()
+        if tag == "div":
+            self._depth += 1
+        elif tag == "li":
+            self._in_item = True
 
     def handle_endtag(self, tag: str) -> None:
         if self._finished:
@@ -82,20 +115,24 @@ class _ExtrasParser(HTMLParser):
             heading = "".join(self._heading).strip().rstrip(":").casefold()
             self._heading = None
             if heading == "extras":
-                self._collecting = True
-            elif self._collecting:
-                self._finished = True        # next section — stop here
-        elif tag == "li" and self._item is not None:
-            text = re.sub(r"\s+", " ", "".join(self._item)).strip()
-            if text:
-                self.items.append(text)
-            self._item = None
+                self._awaiting_block = True
+            return
+        if not self._depth:
+            return
+        if tag in self.BREAKS:
+            self._flush()
+            if tag == "li":
+                self._in_item = False
+        if tag == "div":
+            self._depth -= 1
+            if self._depth == 0:
+                self._finished = True
 
     def handle_data(self, data: str) -> None:
         if self._heading is not None:
             self._heading.append(data)
-        elif self._item is not None:
-            self._item.append(data)
+        elif self._depth:
+            self._line.append(data)
 
 
 def split_runtime(text: str) -> Listing:
@@ -151,15 +188,19 @@ def lookup(ref: str, cache_dir: Optional[Path] = None) -> List[Listing]:
         cache = Path(cache_dir).expanduser() / f"{ident.replace(',', '_')}.json"
         if cache.is_file():
             try:
-                return [(name, secs) for name, secs in json.loads(cache.read_text())]
-            except (OSError, ValueError):
-                pass                          # unreadable cache: just refetch
+                stored = json.loads(cache.read_text())
+                if stored.get("version") == CACHE_VERSION:
+                    return [(name, secs) for name, secs in stored["items"]]
+            except (OSError, ValueError, AttributeError, KeyError, TypeError):
+                pass                # unreadable or older layout: just refetch
 
     listings = parse(fetch(ident))
     if cache is not None and listings:
         try:
             cache.parent.mkdir(parents=True, exist_ok=True)
-            cache.write_text(json.dumps(listings, ensure_ascii=False))
+            cache.write_text(json.dumps({"version": CACHE_VERSION,
+                                         "items": listings},
+                                        ensure_ascii=False))
         except OSError:
             pass                              # a cache we cannot write is fine
     return listings

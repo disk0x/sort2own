@@ -85,9 +85,47 @@ def test_parsing_stops_before_the_next_section():
     assert not any("codiert" in n or "Kapitel" in n for n in names)
 
 
+EXTRAS_BLOCK = ("<b>Extras:</b></p></div><div class=\"fassung-absatz\">"
+                "{}</div></div><b>Bemerkungen:</b>")
+
+
 def test_a_page_without_an_extras_section_yields_nothing():
     assert hints_ofdb.parse("<html><body><b>Bemerkungen:</b>"
                             "<ul><li>16 Kapitel</li></ul></body></html>") == []
+
+
+def test_bare_text_entries_are_found_as_well_as_list_items():
+    """
+    Some releases list extras as plain text beside a <strong> name rather than
+    in a list, under sub-headings that are themselves bold.
+    """
+    page = EXTRAS_BLOCK.format(
+        "<strong>Featurettes:</strong>"
+        "<ul><li>Filming Zone (32:02 Min.) **<br /></li></ul>"
+        "<strong>Interview mit X </strong>(18:45 Min.) ***<strong><br /></strong>"
+        "<strong>Kinotrailer </strong>(1:17 Min.) ***")
+    assert hints_ofdb.parse(page) == [
+        ("Filming Zone", 1922), ("Interview mit X", 1125), ("Kinotrailer", 77)]
+
+
+def test_a_sub_heading_is_not_an_extra():
+    page = EXTRAS_BLOCK.format("<strong>Featurettes:</strong>"
+                               "<ul><li>Filming Zone (32:02 Min.)</li></ul>")
+    assert [n for n, _ in hints_ofdb.parse(page)] == ["Filming Zone"]
+
+
+def test_the_footnote_legend_is_not_an_extra():
+    page = EXTRAS_BLOCK.format(
+        "<ul><li>Filming Zone (32:02 Min.) **</li></ul>"
+        "<div><em>* = englisch mit optionalen deutschen Untertiteln<br />"
+        "** = englisch ohne Untertitel</em></div>")
+    assert [n for n, _ in hints_ofdb.parse(page)] == ["Filming Zone"]
+
+
+def test_the_next_section_is_not_read_as_extras():
+    page = EXTRAS_BLOCK.format("<ul><li>Filming Zone (32:02 Min.)</li></ul>")
+    page += "<div><p>Audiodeskription (2:00 Min.)</p></div>"
+    assert [n for n, _ in hints_ofdb.parse(page)] == ["Filming Zone"]
 
 
 def test_junk_does_not_raise():
@@ -103,14 +141,15 @@ def test_a_cached_listing_is_used_instead_of_fetching(tmp_path, monkeypatch):
 
     cache = tmp_path / "ofdb"
     cache.mkdir()
-    (cache / "123456_789012.json").write_text('[["Die Story", 150]]')
+    (cache / "123456_789012.json").write_text(
+        '{"version": %d, "items": [["Die Story", 150]]}' % hints_ofdb.CACHE_VERSION)
     assert hints_ofdb.lookup("123456,789012", cache) == [("Die Story", 150)]
 
 
 def test_a_fetched_listing_is_written_to_the_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(hints_ofdb, "fetch", lambda ref:
-                        "<b>Extras:</b><ul><li>Die Story (2:30 Min.)</li></ul>"
-                        "<b>Bemerkungen:</b>")
+                        "<b>Extras:</b></p></div><div><ul>"
+                        "<li>Die Story (2:30 Min.)</li></ul></div></div>")
     cache = tmp_path / "ofdb"
     assert hints_ofdb.lookup("123456,789012", cache) == [("Die Story", 150)]
     assert (cache / "123456_789012.json").is_file()
@@ -118,8 +157,8 @@ def test_a_fetched_listing_is_written_to_the_cache(tmp_path, monkeypatch):
 
 def test_an_unreadable_cache_just_refetches(tmp_path, monkeypatch):
     monkeypatch.setattr(hints_ofdb, "fetch", lambda ref:
-                        "<b>Extras:</b><ul><li>Trailer (2:32 Min.)</li></ul>"
-                        "<b>Bemerkungen:</b>")
+                        "<b>Extras:</b></p></div><div><ul>"
+                        "<li>Trailer (2:32 Min.)</li></ul></div></div>")
     cache = tmp_path / "ofdb"
     cache.mkdir()
     (cache / "123456_789012.json").write_text("not json")
@@ -240,3 +279,30 @@ def test_the_run_still_sorts_when_hints_fail(make_rip, src_dir, library,
                           "--copy", "--min-extra", "3", "--ofdb", "1,2",
                           "--name", "Test Film (2024)"]) == 0
     assert (library / "Test Film (2024)" / "Test Film (2024).mkv").exists()
+
+
+def test_a_cache_from_an_older_parser_is_discarded(tmp_path, monkeypatch):
+    """
+    A fixed parser must reach anyone who already looked the release up. The
+    footnote bug otherwise kept being served from disk after it was fixed.
+    """
+    monkeypatch.setattr(hints_ofdb, "fetch", lambda ref:
+                        "<b>Extras:</b></p></div><div><ul>"
+                        "<li>Filming Zone (32:02 Min.) **</li></ul></div></div>")
+    cache = tmp_path / "ofdb"
+    cache.mkdir()
+    (cache / "123456_789012.json").write_text(
+        '{"version": %d, "items": [["Filming Zone (32:02 Min.) **", null]]}'
+        % (hints_ofdb.CACHE_VERSION - 1))
+
+    assert hints_ofdb.lookup("123456,789012", cache) == [("Filming Zone", 1922)]
+
+
+def test_a_cache_in_the_old_bare_list_layout_is_discarded(tmp_path, monkeypatch):
+    monkeypatch.setattr(hints_ofdb, "fetch", lambda ref:
+                        "<b>Extras:</b></p></div><div><ul>"
+                        "<li>Trailer (2:32 Min.)</li></ul></div></div>")
+    cache = tmp_path / "ofdb"
+    cache.mkdir()
+    (cache / "123456_789012.json").write_text('[["Trailer (2:32 Min.)", null]]')
+    assert hints_ofdb.lookup("123456,789012", cache) == [("Trailer", 152)]
