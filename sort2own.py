@@ -106,6 +106,10 @@ from typing import List, Optional, Tuple
 # Constants
 # ---------------------------------------------------------------------------
 
+# Bumped by hand when a release is cut, and recorded in every manifest run so
+# a folder sorted months ago can say which build laid it out.
+__version__ = "1.0.0"
+
 # Folder names Jellyfin recognises for extras. The folder decides the type;
 # the file name inside it is free. "extras" is the generic, untyped bucket.
 # https://jellyfin.org/docs/general/server/media/movies/#extras
@@ -974,6 +978,7 @@ def execute(plan: Plan, mode: str, dry_run: bool, full_verify: bool = False,
         manifest.rename(kept)
         print(f"Unreadable manifest kept as {kept.name}", file=sys.stderr)
     existing.append({"when": datetime.now().isoformat(timespec="seconds"),
+                     "version": __version__,
                      "name": plan.name, "tv": plan.tv,
                      "provider_id": plan.provider_id, "disc": plan.disc_label,
                      "actions": actions, "skipped": skipped})
@@ -1542,6 +1547,8 @@ def build_parser() -> argparse.ArgumentParser:
                "  %(prog)s ~/rips/A_FILM --yes --name 'A Film (2024)' --runtime 119\n"
                "  %(prog)s ~/rips/DISC1 --yes --tv --name 'A Series (2016)' --season 2\n"
                "  %(prog)s --undo '/media/movies/A Film (2024)'\n")
+    p.add_argument("--version", action="version",
+                   version=f"sort2own {__version__}")
     p.add_argument("source", type=Path, nargs="?",
                    help="directory containing MakeMKV's *.mkv output")
     p.add_argument("--library", type=Path, default=Path("/media/movies"),
