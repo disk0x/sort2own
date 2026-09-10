@@ -91,13 +91,12 @@ import time
 import tomllib
 import urllib.error
 import urllib.request
-from collections import Counter
 
 try:
     import hints_ofdb
 except Exception:        # noqa: BLE001 — a missing or broken sidecar must not
     hints_ofdb = None    # stop a disc being sorted; hints are advisory only
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from statistics import median
@@ -172,7 +171,6 @@ class Title:
     audio_titles: List[str] = field(default_factory=list)
     audio_langs: List[str] = field(default_factory=list)
     chapter_titles: List[str] = field(default_factory=list)
-    streams: "Counter[str]" = field(default_factory=Counter)  # codec_type → count
     kind: str = EXTRA        # MAIN / VERSION / EXTRA / EPISODE / SKIP
     extra_type: str = "extras"   # which EXTRA_TYPES folder, when kind == EXTRA
     label: str = ""          # version name / extra file name / episode number
@@ -268,7 +266,6 @@ def ffprobe(path: Path) -> Title:
         audio_titles=[t for t in (tags(s).get("title", "").strip() for s in audio) if t],
         audio_langs=[l for l in (tags(s).get("language", "").strip() for s in audio) if l],
         chapter_titles=[t for t in (tags(c).get("title", "").strip() for c in chapters) if t],
-        streams=Counter(s.get("codec_type", "?") for s in streams),
     )
 
 
@@ -1161,7 +1158,6 @@ def run_tui(plan: Plan) -> bool:
         Offer the names this title could have. Returns the chosen one, or None
         if the user backed out. Digits pick; anything else cancels.
         """
-        import curses
         stdscr.erase()
         stdscr.addstr(0, 0, f"Which is {t.path.name}?  ({t.hms}, {t.gib})",
                       curses.A_BOLD)
@@ -1721,7 +1717,7 @@ def main(argv: List[str]) -> int:
         if code == 0 and not a.dry_run:
             refresh_if_configured(a)
         return code
-    if (a.run is not None or a.all) and not a.undo:
+    if a.run is not None or a.all:
         sys.exit("--run and --all only apply to --undo")
     if (a.continue_episodes or a.start_episode is not None) and not a.tv:
         sys.exit("--continue and --start-episode only apply to --tv")

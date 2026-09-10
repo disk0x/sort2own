@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import re
-import urllib.error
 import urllib.request
 from html.parser import HTMLParser
 from pathlib import Path

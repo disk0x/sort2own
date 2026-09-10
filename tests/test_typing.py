@@ -94,7 +94,6 @@ def test_shape_alone_is_never_guessed_from(make_plan, duration):
     """
     plan = make_plan([{"duration": duration}])
     t = plan.titles[0]
-    t.streams = sort2own.Counter({"video": 1, "audio": 1})
     assert sort2own.type_extra(t, plan, None)[0] is None
 
 
@@ -169,7 +168,7 @@ def test_typing_survives_a_second_classify(make_plan):
 
 # --- probing ---------------------------------------------------------------
 
-def test_ffprobe_reads_streams_chapters_and_tags(make_rip, src_dir):
+def test_ffprobe_reads_audio_chapters_and_tags(make_rip, src_dir):
     """One ffprobe call has to return all of it — see the D1 research."""
     make_rip([{"duration": 4, "tag": "Making of", "audio": [
         {"title": "Deutsch 5.1", "language": "ger"},
@@ -179,8 +178,6 @@ def test_ffprobe_reads_streams_chapters_and_tags(make_rip, src_dir):
     assert t.tag == "Making of"
     assert t.audio_titles == ["Deutsch 5.1", "Audio Commentary"]
     assert t.audio_langs == ["ger", "eng"]
-    assert t.streams["audio"] == 2
-    assert t.streams["video"] == 1
 
 
 def test_a_plain_rip_probes_without_stream_metadata(make_rip, src_dir):
@@ -188,4 +185,3 @@ def test_a_plain_rip_probes_without_stream_metadata(make_rip, src_dir):
     t = sort2own.scan(src_dir)[0]
     assert t.audio_titles == []
     assert t.chapter_titles == []
-    assert t.streams["video"] == 1
