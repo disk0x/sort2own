@@ -12,6 +12,9 @@ env/
 *.egg-info/
 dist/
 build/
+# Release tarballs from `make dist` — rebuildable from the tag, never tracked
+*.tar.gz
+*.rpm
 
 # Test artifacts
 .pytest_cache/
