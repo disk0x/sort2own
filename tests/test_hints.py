@@ -41,6 +41,12 @@ A_FILM = [
      ('Soundtrack Video "Berlin Heist"', 139)),
     ("Trailershow", ("Trailershow", None)),
     ("Alle abspielen ", ("Alle abspielen", None)),
+    # Footnote markers follow the runtime on some releases. Anchoring the
+    # pattern to the end of the line matched none of these, so a whole disc
+    # came back untimed and nothing could be named.
+    ("Filming Zone (32:02 Min.) **", ("Filming Zone", 1922)),
+    ("Eine seltene Perspektive (2:00 Min.) *", ("Eine seltene Perspektive", 120)),
+    ("Auf dem Boden (2:32 Min.)  †", ("Auf dem Boden", 152)),
 ])
 def test_a_listing_splits_into_name_and_seconds(text, expected):
     assert hints_ofdb.split_runtime(text) == expected

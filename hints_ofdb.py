@@ -31,8 +31,10 @@ BASE = "https://www.ofdb.de/fassung/"
 USER_AGENT = "sort2own (personal media sorter; one page per run, cached)"
 TIMEOUT = 15.0
 
-# "Die Story (2:30 Min.)" → the trailing runtime.
-RUNTIME = re.compile(r"\s*\((\d+):(\d{2})\s*Min\.?\)\s*$")
+# "Die Story (2:30 Min.)" → the runtime. Deliberately not anchored to the end
+# of the line: entries often carry a footnote marker after it, as in
+# "Filming Zone (32:02 Min.) **", and anchoring silently matched nothing.
+RUNTIME = re.compile(r"\((\d+):(\d{2})\s*Min\.?\)")
 
 # The id pair in an OFDb Fassung URL: /fassung/123456,789012,A-Film/
 REFERENCE = re.compile(r"(\d+),(\d+)")
@@ -97,9 +99,16 @@ class _ExtrasParser(HTMLParser):
 
 
 def split_runtime(text: str) -> Listing:
-    """"Die Story (2:30 Min.)" → ("Die Story", 150). No runtime → None."""
-    found = RUNTIME.search(text)
-    if not found:
+    """
+    "Die Story (2:30 Min.)" → ("Die Story", 150). No runtime → None.
+
+    The name is whatever precedes the runtime; anything after it is a footnote
+    marker referring to a note elsewhere on the page, not part of the name.
+    """
+    found = None
+    for found in RUNTIME.finditer(text):
+        pass                                  # the last one, if a name has two
+    if found is None:
         return text.strip(), None
     minutes, seconds = int(found.group(1)), int(found.group(2))
     return text[:found.start()].strip(), minutes * 60 + seconds
