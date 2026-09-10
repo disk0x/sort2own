@@ -843,7 +843,26 @@ def copy_file(src: Path, dst: Path, progress: bool) -> None:
     if drew:
         sys.stderr.write("\r\033[K")      # take the progress line back down
         sys.stderr.flush()
-    shutil.copystat(src, dst)
+    carry_over_metadata(src, dst)
+
+
+def carry_over_metadata(src: Path, dst: Path) -> None:
+    """
+    Copy timestamps and permissions across, as far as the destination allows.
+
+    Best effort on purpose: a gvfs/SMB share refuses chmod outright (errno 95),
+    and `shutil.copystat` raises — which killed a run *after* 31 GB had already
+    landed. The bytes are the point; the mode bits are decoration, and losing
+    them must not lose the transfer.
+    """
+    try:
+        shutil.copystat(src, dst)
+    except OSError:
+        try:
+            info = src.stat()
+            os.utime(dst, (info.st_atime, info.st_mtime))
+        except OSError:
+            pass                          # nothing here is worth failing over
 
 
 def progress_line(name: str, done: int, total: int, elapsed: float) -> str:

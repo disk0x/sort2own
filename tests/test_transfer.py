@@ -6,6 +6,8 @@ for a run that copied every file, and a 32 GB transfer gave no output for
 several minutes.
 """
 
+import os
+
 import sort2own
 
 
@@ -121,3 +123,64 @@ def test_a_move_across_filesystems_copies_then_removes(tmp_path, monkeypatch):
     assert sort2own.place(src, dst, "move") == "move"
     assert dst.read_bytes() == b"payload"
     assert not src.exists()
+
+
+# --- destinations that cannot take metadata --------------------------------
+
+def test_a_share_that_refuses_chmod_does_not_lose_the_copy(tmp_path,
+                                                           monkeypatch):
+    """
+    Regression: gvfs/SMB rejects chmod with errno 95, shutil.copystat raised,
+    and the run died *after* 31 GB had been transferred.
+    """
+    src, dst = tmp_path / "a.mkv", tmp_path / "b.mkv"
+    src.write_bytes(b"payload" * 1000)
+
+    def refuse(*args, **kwargs):
+        raise OSError(95, "Operation not supported")
+    monkeypatch.setattr(sort2own.shutil, "copystat", refuse)
+
+    sort2own.copy_file(src, dst, progress=False)
+    assert dst.read_bytes() == src.read_bytes()
+
+
+def test_timestamps_are_still_carried_over_when_chmod_fails(tmp_path,
+                                                            monkeypatch):
+    src, dst = tmp_path / "a.mkv", tmp_path / "b.mkv"
+    src.write_bytes(b"payload")
+    os.utime(src, (1_000_000, 1_000_000))
+
+    def refuse(*args, **kwargs):
+        raise OSError(95, "Operation not supported")
+    monkeypatch.setattr(sort2own.shutil, "copystat", refuse)
+
+    sort2own.copy_file(src, dst, progress=False)
+    assert int(dst.stat().st_mtime) == 1_000_000
+
+
+def test_a_destination_refusing_everything_still_keeps_the_bytes(tmp_path,
+                                                                 monkeypatch):
+    src, dst = tmp_path / "a.mkv", tmp_path / "b.mkv"
+    src.write_bytes(b"payload")
+
+    def refuse(*args, **kwargs):
+        raise OSError(95, "Operation not supported")
+    monkeypatch.setattr(sort2own.shutil, "copystat", refuse)
+    monkeypatch.setattr(sort2own.os, "utime", refuse)
+
+    sort2own.copy_file(src, dst, progress=False)
+    assert dst.read_bytes() == b"payload"
+
+
+def test_a_whole_run_survives_a_share_that_refuses_chmod(make_rip, src_dir,
+                                                         library, monkeypatch):
+    make_rip([{"duration": 4}, {"duration": 2, "tag": "Trailer"}])
+
+    def refuse(*args, **kwargs):
+        raise OSError(95, "Operation not supported")
+    monkeypatch.setattr(sort2own.shutil, "copystat", refuse)
+
+    assert sort2own.main([str(src_dir), "--library", str(library), "--yes",
+                          "--copy", "--min-extra", "1",
+                          "--name", "A Film (2024)"]) == 0
+    assert (library / "A Film (2024)" / "A Film (2024).mkv").exists()
