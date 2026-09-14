@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 dkr
+# SPDX-License-Identifier: AGPL-3.0-only
 """
 Extras names from OFDb.de — an optional sidecar for sort2own.
 

@@ -24,7 +24,7 @@ Version:        1.0.0
 Release:        2%{?dist}
 Summary:        Sort MakeMKV disc rips into a Jellyfin-ready library
 
-License:        AGPL-3.0-or-later
+License:        AGPL-3.0-only
 URL:            https://github.com/disk0x/sort2own
 Source0:        %{name}-%{version}.tar.gz
 

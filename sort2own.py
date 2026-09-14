@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 dkr
+# SPDX-License-Identifier: AGPL-3.0-only
 """
 sort2own.py — turn a MakeMKV rip (DVD or Blu-ray) into a Jellyfin-ready copy
 you actually own.
@@ -1417,7 +1419,8 @@ def jellyfin_refresh(url: str, key: str, timeout: float = 10.0) -> Optional[str]
     # full set (jellyfin/jellyfin#12990).
     request.add_header("Authorization",
                        'MediaBrowser Client="sort2own", Device="sort2own", '
-                       f'DeviceId="sort2own", Version="1.0", Token="{key}"')
+                       f'DeviceId="sort2own", Version="{__version__}", '
+                       f'Token="{key}"')
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             if response.status not in (200, 204):

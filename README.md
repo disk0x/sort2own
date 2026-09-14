@@ -367,8 +367,8 @@ re-encoded or replaced is reported and left where it is.
 | `--runtime MIN` | — | pick the title closest to this runtime as the main feature, instead of the longest |
 | `--min-extra SEC` | `90` | titles shorter than this are skipped as junk |
 | `--version-ratio X` | `0.85` | titles at least this fraction of the main length become alternate versions |
-| `--dup-tolerance X` | `0.01` | size tolerance (1%) for duplicate detection |
-| `--dup-seconds SEC` | `2.0` | how close two lengths must be to count as the same content |
+| `--dup-tolerance X` | `0.001` | size tolerance (0.1%) for duplicate detection |
+| `--dup-seconds SEC` | `0.2` | how close two lengths must be to count as the same content |
 | `--copy` | — | always copy, never hardlink |
 | `--move` | — | move files instead of linking |
 | `--verify sample\|full` | `sample` | how thoroughly to check each copy; `full` hashes every byte |
