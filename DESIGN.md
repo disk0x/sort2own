@@ -295,9 +295,11 @@ exercise the cross-filesystem warning, point `--library` at a tmpfs such as
   the tool's most important decision at risk to catch a rarer case. The
   play-all rule in `_classify_tv` works only because episodes are identified
   first.
-- A failed transfer part way through a run raises before the manifest is
-  written, so files already placed are invisible to `--undo`. The manifest
-  write is not atomic either. Tracked as an issue.
+- A failed transfer part way through a run raises out of `execute()` before the
+  manifest is written, so files that already landed are invisible to `--undo`
+  and the next run places them again alongside. ENOSPC and a dropped SMB share
+  are the realistic causes. The manifest write is not atomic either — it wants
+  a temporary file and `os.replace()`. Both are known and unfixed.
 
 ## Related tools
 
