@@ -42,7 +42,7 @@ extra by type — in German or English:
 Deutscher Trailer            -> trailers/
 Die Story                    -> featurettes/
 Hinter den Kulissen          -> behind the scenes/
-Musikvideo EINE BAND …         -> scenes/
+Musikvideo EINE BAND …       -> scenes/
 Entfallene Szenen            -> deleted scenes/
 ```
 
@@ -69,7 +69,7 @@ second, and the names are matched to your files by length:
 ```
 150s  ->  featurettes/Die Story.mkv
 152s  ->  trailers/Trailer.mkv
-172s  ->  scenes/Musikvideo EINE BAND "Hinterm Block".mkv
+172s  ->  scenes/Musikvideo EINE BAND "Ein Lied".mkv
 137s  ->  OFDb: could be Behind the Scenes / Erster Entwurf
 ```
 

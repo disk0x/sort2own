@@ -40,11 +40,11 @@ def test_extras_sit_under_the_identified_folder(make_plan):
 def test_episode_keeps_the_bare_show_name_under_an_identified_folder(make_plan):
     """Jellyfin matches episodes on SxxEyy; the ID belongs on the series folder."""
     plan = make_plan([{"duration": 2700}], name="A Series (2016)",
-                     tv=True, provider_id="tmdbid-42009")
+                     tv=True, provider_id="tmdbid-445566")
     plan.titles[0].kind, plan.titles[0].label = EPISODE, "3"
     dst = sort2own.destination(plan, plan.titles[0])
     assert dst.name == "A Series (2016) S01E03.mkv"
-    assert dst.parent.parent.name == "A Series (2016) [tmdbid-42009]"
+    assert dst.parent.parent.name == "A Series (2016) [tmdbid-445566]"
 
 
 def test_no_id_leaves_the_folder_name_untouched(make_plan, library):

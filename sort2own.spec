@@ -2,7 +2,7 @@
 #
 # Build with:
 #     make dist
-#     rpmbuild -ta sort2own-1.0.0.tar.gz
+#     rpmbuild -ta sort2own-*.tar.gz
 # or, if you keep a ~/rpmbuild tree:
 #     make dist && cp sort2own-*.tar.gz ~/rpmbuild/SOURCES/
 #     rpmbuild -ba sort2own.spec

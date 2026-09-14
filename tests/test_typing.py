@@ -41,7 +41,7 @@ def typed(make_plan, tag="", main=None, **fields):
     ("Entfallene Szenen", "deleted scenes"),
     ("Deleted Scenes", "deleted scenes"),
     ("Musikvideo EINE BAND", "scenes"),
-    ("Soundtrack-Video „Berlin Heist“", "scenes"),
+    ("Soundtrack-Video „Zweite Kamera“", "scenes"),
     ("Outtakes", "other"),
     ("Pannen", "other"),
 ])

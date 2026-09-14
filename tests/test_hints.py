@@ -1,33 +1,27 @@
 """
 Item 8 — naming extras from an OFDb release listing.
 
-The parser is exercised against a saved page under tests/fixtures/, which is
-gitignored because it is someone else's HTML; those tests skip when it is not
-there. Nothing here touches the network.
+Every page here is a hand-written fragment, not a saved copy of someone else's
+site: the parser only cares about structure, so the fragments carry the shapes
+it has to survive and nothing else. Nothing here touches the network.
 """
-
-from pathlib import Path
 
 import pytest
 
 import hints_ofdb
 import sort2own
-from sort2own import EXTRA, MAIN, VERSION
 
-FIXTURE = Path(__file__).parent / "fixtures" / "ofdb_a_film.html"
-
-# What the real page lists, as of Sept 2026. Nine of the fifteen timed entries
-# are unique; the disc's trailer reel repeats three of the featurette lengths.
-A_FILM = [
-    ("Die Story", 150), ("Realitiy Check", 155), ("Behind the Scenes", 137),
-    ('Soundtrack Video "Girls in the Bus"', 117),
-    ('Soundtrack Video "Berlin Heist"', 139),
-    ('Musikvideo EINE BAND "Hinterm Block"', 172),
-    ("Trailer", 152), ("Unsere DVD/BD-Empfehlung: Perfect Addiction", 127),
-    ("Trailershow", None), ("Alle abspielen", None),
-    ("Erster Entwurf", 137), ("Contra", 117), ("Caveman", 57),
-    ("Tiger Girl", 90), ("Jugend ohne Gott", 110),
-    ("Zeiten ändern dich", 127), ("Blutzbrüdaz", 143),
+# An invented release listing carrying the shapes the matcher has to cope
+# with: a name the keyword table recognises and one it does not, two entries
+# that happen to share a length, and entries a disc lists without a runtime.
+EXTRAS_LISTING = [
+    ("Die Story", 150),             # the keyword table types this featurettes
+    ("Zweite Kamera", 155),         # no keyword matches: stays a plain extra
+    ("Behind the Scenes", 137),     # ) equal lengths, so duration alone
+    ("Erster Entwurf", 137),        # ) cannot tell these two apart
+    ("Trailer", 152),
+    ("Trailershow", None),          # a reel, listed without a runtime
+    ("Alle abspielen", None),
 ]
 
 
@@ -35,10 +29,10 @@ A_FILM = [
 
 @pytest.mark.parametrize("text,expected", [
     ("Die Story (2:30 Min.)", ("Die Story", 150)),
-    ("Caveman (0:57 Min.)", ("Caveman", 57)),
+    ("Kurzfilm (0:57 Min.)", ("Kurzfilm", 57)),
     ("Behind the Scenes (2:17 Min)", ("Behind the Scenes", 137)),
-    ('Soundtrack Video "Berlin Heist" (2:19 Min.)',
-     ('Soundtrack Video "Berlin Heist"', 139)),
+    ('Soundtrack Video "Zweite Kamera" (2:19 Min.)',
+     ('Soundtrack Video "Zweite Kamera"', 139)),
     ("Trailershow", ("Trailershow", None)),
     ("Alle abspielen ", ("Alle abspielen", None)),
     # Footnote markers follow the runtime on some releases. Anchoring the
@@ -68,25 +62,43 @@ def test_something_that_is_not_a_reference_is_rejected():
         hints_ofdb.reference("A Film")
 
 
-# --- the real page ---------------------------------------------------------
-
-@pytest.mark.skipif(not FIXTURE.is_file(),
-                    reason="saved OFDb page not present (it is gitignored)")
-def test_the_saved_page_parses_exactly():
-    assert hints_ofdb.parse(FIXTURE.read_text(encoding="utf-8",
-                                              errors="replace")) == A_FILM
-
-
-@pytest.mark.skipif(not FIXTURE.is_file(), reason="saved OFDb page not present")
-def test_parsing_stops_before_the_next_section():
-    """The page continues with "Bemerkungen:" — those are not extras."""
-    names = [n for n, _ in hints_ofdb.parse(
-        FIXTURE.read_text(encoding="utf-8", errors="replace"))]
-    assert not any("codiert" in n or "Kapitel" in n for n in names)
-
+# --- page shapes -----------------------------------------------------------
 
 EXTRAS_BLOCK = ("<b>Extras:</b></p></div><div class=\"fassung-absatz\">"
                 "{}</div></div><b>Bemerkungen:</b>")
+
+
+def test_a_whole_listing_parses_in_page_order():
+    """
+    The block boundary is the only reliable landmark, so a release that mixes
+    every shape at once has to come out in order: a sub-heading that is not an
+    extra, list items, bare text beside a <strong> name, an entry with no
+    runtime, and a footnote legend that is not an extra either.
+    """
+    page = EXTRAS_BLOCK.format(
+        "<strong>Featurettes:</strong>"
+        "<ul><li>Die Story (2:30 Min.)</li>"
+        "<li>Zweite Kamera (2:35 Min.) *</li></ul>"
+        "<strong>Kinotrailer </strong>(2:32 Min.) **"
+        "<ul><li>Trailershow</li></ul>"
+        "<div><em>* = ohne Untertitel<br />** = englisch</em></div>")
+    assert hints_ofdb.parse(page) == [
+        ("Die Story", 150), ("Zweite Kamera", 155),
+        ("Kinotrailer", 152), ("Trailershow", None)]
+
+
+def test_a_nested_reel_is_read_as_its_own_entries():
+    """
+    Some releases wrap the extras in a single list item and hang the trailer
+    reel off it as a nested list; the reel's entries are extras in their own
+    right, not part of the name above them.
+    """
+    page = EXTRAS_BLOCK.format(
+        "<ul><li>Die Story (2:30 Min.)"
+        "<ol><li>Trailer A (1:00 Min.)</li>"
+        "<li>Trailer B (1:05 Min.)</li></ol></li></ul>")
+    assert hints_ofdb.parse(page) == [
+        ("Die Story", 150), ("Trailer A", 60), ("Trailer B", 65)]
 
 
 def test_a_page_without_an_extras_section_yields_nothing():
@@ -167,7 +179,7 @@ def test_an_unreadable_cache_just_refetches(tmp_path, monkeypatch):
 
 # --- applying the hints ----------------------------------------------------
 
-def hinted(make_plan, specs, listings=A_FILM, apply=True,
+def hinted(make_plan, specs, listings=EXTRAS_LISTING, apply=True,
            monkeypatch=None):
     plan = make_plan([{"duration": 7200}] + specs)
     sort2own.classify(plan, None, 90, 0.85, 0.01)
@@ -186,7 +198,7 @@ def test_a_unique_length_match_names_and_types_the_extra(make_plan, monkeypatch)
 def test_a_match_the_keywords_do_not_know_still_gets_its_name(make_plan,
                                                               monkeypatch):
     ts = hinted(make_plan, [{"duration": 155}], monkeypatch=monkeypatch)
-    assert ts[1].label == "Realitiy Check"       # OFDb's own spelling, kept
+    assert ts[1].label == "Zweite Kamera"       # OFDb's own spelling, kept
     assert ts[1].extra_type == "extras"
 
 
