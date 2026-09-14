@@ -477,9 +477,28 @@ invocation), pair `sort2own` with
 or a similar tool — `sort2own` is deliberately just the sorting step, so it
 composes with whatever rips the disc.
 
+## Development
+
+```bash
+python3 -m pytest -q          # the test suite
+make check                    # the same thing
+```
+
+The tests need no media and no network: files are sparse placeholders, and the
+few cases that genuinely parse video generate their own clips with ffmpeg and
+skip when ffmpeg is absent. `DESIGN.md` covers the architecture, the invariants
+a change has to preserve, and the Jellyfin naming rules behind `destination()`.
+
+Written with AI assistance, reviewed by a human, and covered by the test suite.
+
 ## License
 
 [AGPLv3](LICENSE). If you run a modified version of `sort2own` as a
 network service (unlikely for a local sorting script, but the obligation
 exists), you must make the modified source available to users of that
 service — see the license for the exact terms.
+
+© 2026 dkr ([github.com/disk0x](https://github.com/disk0x)).
+
+Jellyfin, MakeMKV, OFDb, TMDB and IMDb are trademarks of their respective
+owners. This project is not affiliated with or endorsed by any of them.

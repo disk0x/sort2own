@@ -1,7 +1,7 @@
 # sort2own — install/uninstall/dist
 #
-# The tool is deliberately a single file plus an optional sidecar (see §1 of
-# CLAUDE.md), so there is nothing to compile. This exists so the release is
+# The tool is deliberately a single file plus an optional sidecar (see
+# DESIGN.md), so there is nothing to compile. This exists so the release is
 # installed the same way every time instead of being copied by hand, and so
 # the RPM spec has one place to call.
 #

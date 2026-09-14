@@ -1330,7 +1330,7 @@ def run_tui(plan: Plan) -> bool:
 # How close a ripped extra's length must be to a listed one to be the same
 # thing. Near-exact on purpose: listed extras sit as little as two seconds
 # apart, so a wider window makes most of a disc ambiguous rather than more
-# matchable. Measured — see CLAUDE.md §6 item 8.
+# matchable. Measured against a real release listing.
 HINT_SECONDS = 1.0
 
 

@@ -1,4 +1,4 @@
-"""The Jellyfin layout rules — see CLAUDE.md §3."""
+"""The Jellyfin layout rules — see DESIGN.md."""
 
 import sort2own
 from sort2own import MAIN, VERSION, EXTRA, EPISODE, SKIP

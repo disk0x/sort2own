@@ -56,7 +56,7 @@ def test_a_run_records_the_version(make_plan, library):
 
 
 def test_a_manifest_without_a_version_still_loads(tmp_path):
-    """Additive only — CLAUDE.md §2. Runs written before 1.0.0 have no field."""
+    """Additive only — see DESIGN.md. Runs written before 1.0.0 have no field."""
     (tmp_path / sort2own.MANIFEST_NAME).write_text(json.dumps(
         [{"when": "2026-09-09T12:00:00", "name": "Old Film (2001)",
           "tv": False, "actions": []}]))
