@@ -1,7 +1,6 @@
 """Handing a title to the desktop's media player, so the user can look at it."""
 
 import subprocess
-from pathlib import Path
 
 import sort2own
 

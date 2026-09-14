@@ -270,7 +270,7 @@ def ffprobe(path: Path) -> Title:
         chapters=len(chapters),
         tag=tags(fmt).get("title", "").strip(),
         audio_titles=[t for t in (tags(s).get("title", "").strip() for s in audio) if t],
-        audio_langs=[l for l in (tags(s).get("language", "").strip() for s in audio) if l],
+        audio_langs=[x for x in (tags(s).get("language", "").strip() for s in audio) if x],
         chapter_titles=[t for t in (tags(c).get("title", "").strip() for c in chapters) if t],
     )
 
@@ -525,7 +525,8 @@ def _classify_tv(plan: Plan, live: List[Title], min_extra: int) -> None:
         if t.duration < min_extra:
             t.kind, t.note = SKIP, f"shorter than {min_extra}s"
         elif abs(t.duration - med) <= 0.25 * med:
-            t.kind, t.label, t.note = EPISODE, str(ep), f"≈ median episode length ({int(med//60)} min)"
+            t.kind, t.label = EPISODE, str(ep)
+            t.note = f"≈ median episode length ({int(med//60)} min)"
             ep += 1
         else:
             t.note = "extra (length unlike the episodes)"
@@ -1192,7 +1193,8 @@ def run_tui(plan: Plan) -> bool:
         h, w = stdscr.getmaxyx()
         kind_word = "TV series" if plan.tv else "Movie"
         season = f"  season {plan.season:02d}" if plan.tv else ""
-        stdscr.addstr(0, 0, f"sort2own  —  {kind_word}: {plan.name}{season}"[: w - 1], curses.A_BOLD)
+        stdscr.addstr(0, 0, f"sort2own  —  {kind_word}: {plan.name}{season}"[: w - 1],
+                      curses.A_BOLD)
         stdscr.addstr(1, 0, f"library: {plan.library}"[: w - 1])
         waiting = sum(1 for t in plan.titles if t.suggestion)
         hdr = (f"{'#':>3} {'?':1s} {'file':26s} {'length':>8} {'size':>7} {'ch':>3}  "
@@ -1309,7 +1311,8 @@ def run_tui(plan: Plan) -> bool:
 
             elif key == ord("t"):                                # toggle tv/movie
                 plan.tv = not plan.tv
-                KINDS[:] = [MAIN, VERSION, EXTRA, EPISODE, SKIP] if plan.tv else [MAIN, VERSION, EXTRA, SKIP]
+                KINDS[:] = ([MAIN, VERSION, EXTRA, EPISODE, SKIP] if plan.tv
+                            else [MAIN, VERSION, EXTRA, SKIP])
                 for o in plan.titles:
                     if o.kind == EPISODE and not plan.tv:
                         o.kind = EXTRA
@@ -1597,26 +1600,31 @@ def build_parser() -> argparse.ArgumentParser:
     ids.add_argument("--imdb", metavar="ID",
                      help="IMDb id, appended as [imdbid-ID] (e.g. tt7654321)")
     p.add_argument("--runtime", type=int, metavar="MIN",
-                   help="expected main-feature runtime in minutes; picks the closest title instead of the longest")
+                   help="expected main-feature runtime in minutes; picks the "
+                        "closest title instead of the longest")
     p.add_argument("--min-extra", type=int, default=90, metavar="SEC",
                    help="titles shorter than this are skipped as junk (default 90)")
     p.add_argument("--version-ratio", type=float, default=0.85,
-                   help="titles at least this fraction of the main length are alternate cuts (default 0.85)")
+                   help="titles at least this fraction of the main length are "
+                        "alternate cuts (default 0.85)")
     p.add_argument("--dup-tolerance", type=float, default=0.001,
                    help="size tolerance for duplicate detection (default 0.001 = 0.1%%)")
     p.add_argument("--dup-seconds", type=float, default=0.2, metavar="SEC",
                    help="how close two titles' lengths must be to count as the "
                         "same content (default 0.2 seconds)")
     mode = p.add_mutually_exclusive_group()
-    mode.add_argument("--copy", action="store_true", help="always copy (default: hardlink, copy if not possible)")
-    mode.add_argument("--move", action="store_true", help="move files instead of linking (still never overwrites)")
+    mode.add_argument("--copy", action="store_true",
+                      help="always copy (default: hardlink, copy if not possible)")
+    mode.add_argument("--move", action="store_true",
+                      help="move files instead of linking (still never overwrites)")
     p.add_argument("--verify", choices=["sample", "full"], default="sample",
                    help="how thoroughly to check a copy against its source: "
                         "'sample' reads a few MiB (default), 'full' hashes "
                         "every byte")
     p.add_argument("--force", action="store_true",
                    help="place titles even if an earlier run already placed them")
-    p.add_argument("--yes", "-y", action="store_true", help="unattended: apply the heuristics without the TUI")
+    p.add_argument("--yes", "-y", action="store_true",
+                   help="unattended: apply the heuristics without the TUI")
     p.add_argument("--dry-run", action="store_true", help="show the plan, write nothing")
     p.add_argument("--undo", type=Path, metavar="FOLDER",
                    help="reverse what an earlier run placed in FOLDER, using its manifest")
@@ -1703,7 +1711,8 @@ def resolve_method(src: Path, library: Path, mode: str,
         file=sys.stderr,
     )
     if not interactive:
-        print("Unattended mode: refusing to guess. Pass --copy or --move explicitly.", file=sys.stderr)
+        print("Unattended mode: refusing to guess. Pass --copy or --move "
+              "explicitly.", file=sys.stderr)
         return None
     ans = input("Continue with a copy anyway? [y/N] ").strip().lower()
     return "copy" if ans in ("y", "yes") else None
@@ -1819,7 +1828,8 @@ def main(argv: List[str]) -> int:
     elif not a.name:
         sys.exit("--yes requires --name 'Title (Year)' (a guessed name is too risky unattended)")
 
-    print(f"\n{'TV' if plan.tv else 'Movie'}: {plan.name}   library: {plan.library}   method: {mode}\n")
+    print(f"\n{'TV' if plan.tv else 'Movie'}: {plan.name}   "
+          f"library: {plan.library}   method: {mode}\n")
     outcome = execute(plan, mode, a.dry_run, a.verify == "full",
                       adopt=not a.force)
     if outcome.placed and not a.dry_run:

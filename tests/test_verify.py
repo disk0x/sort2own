@@ -5,7 +5,6 @@ import json
 import pytest
 
 import sort2own
-from sort2own import MAIN
 
 
 # --- sample_hash -----------------------------------------------------------

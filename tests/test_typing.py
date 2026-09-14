@@ -8,7 +8,7 @@ ffmpeg; only the probing test reads a real file.
 import pytest
 
 import sort2own
-from sort2own import MAIN, VERSION, EXTRA
+from sort2own import VERSION, EXTRA
 
 
 def titled(make_plan, tag="", **fields):

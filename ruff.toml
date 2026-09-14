@@ -1,0 +1,12 @@
+# Lint configuration only. There is deliberately no pyproject.toml: sort2own is
+# a script you copy, not a package you install, and a pyproject would invite
+# tools to treat it as the latter.
+
+line-length = 100
+target-version = "py311"
+
+[lint]
+# pycodestyle errors and pyflakes. Enough to catch the things that are actually
+# wrong — unused names, undefined names, broken whitespace — without rewriting
+# a codebase whose style is already consistent.
+select = ["E", "F"]

@@ -1,0 +1,47 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 is the floor: the config loader uses stdlib tomllib.
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install ffmpeg
+        # Only a handful of tests need it — the rest use sparse placeholder
+        # files — but those few are the ones that exercise ffprobe parsing.
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - run: pip install pytest
+
+      - run: python3 -m pytest -q
+
+      - name: Run again without ffmpeg
+        # Everything that needs real media must skip cleanly rather than fail,
+        # so the tool stays testable where ffmpeg is not installed.
+        run: |
+          sudo rm -f "$(command -v ffmpeg)" "$(command -v ffprobe)"
+          python3 -m pytest -q
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff
+      - run: ruff check .
