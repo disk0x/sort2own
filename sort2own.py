@@ -1002,13 +1002,17 @@ def undo_action(action: dict, folder: Path, dry_run: bool) -> Tuple[str, bool]:
     cannot prove the file is the one it put there: a mismatch means something
     else wrote it, and removing it would destroy work that is not ours.
     """
-    dst = Path(action.get("destination", ""))
+    # Normalise before the containment check below. Path.relative_to is purely
+    # lexical: "<folder>/../../etc/passwd" is "inside" <folder> as far as it is
+    # concerned, and returns "../../etc/passwd" rather than raising. Resolving
+    # first is what makes the check mean what it says.
+    dst = Path(action.get("destination", "")).resolve()
     src = Path(action.get("source", ""))
     method = action.get("method", "")
     name = dst.name or "?"
 
     try:
-        dst.relative_to(folder)
+        dst.relative_to(folder.resolve())
     except ValueError:
         return f"REFUSED       {dst} is outside {folder}", False
 

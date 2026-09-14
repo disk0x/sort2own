@@ -182,6 +182,29 @@ def test_a_destination_outside_the_folder_is_refused(make_plan, tmp_path):
     assert outsider.exists()
 
 
+def test_a_destination_that_climbs_out_with_dotdot_is_refused(make_plan,
+                                                              tmp_path):
+    """
+    The containment check used to be lexical, and Path.relative_to does not
+    normalise: "<folder>/../../innocent.mkv" counted as inside the folder. A
+    "move" action is the one that could then act on it, putting a file back
+    over an arbitrary path, so that is what this uses.
+    """
+    plan, folder = sorted_rip(make_plan)
+    outsider = tmp_path / "innocent.mkv"
+    outsider.write_bytes(b"not yours")
+    runs = runs_of(folder)
+    action = runs[0]["actions"][0]
+    action["destination"] = str(folder / ".." / ".." / "innocent.mkv")
+    action["method"] = "move"
+    action["source"] = str(tmp_path / "somewhere-else.mkv")
+    (folder / sort2own.MANIFEST_NAME).write_text(json.dumps(runs))
+
+    assert sort2own.undo(folder, None, False, False) == 1
+    assert outsider.read_bytes() == b"not yours"
+    assert not (tmp_path / "somewhere-else.mkv").exists()
+
+
 def test_a_manifest_predating_verification_is_refused(make_plan):
     plan, folder = sorted_rip(make_plan)
     runs = runs_of(folder)
